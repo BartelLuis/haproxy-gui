@@ -1,18 +1,15 @@
-# Standard-Deployment: nutzt das vorgefertigte Image von GitHub Container Registry.
-# Kein Build nötig:  docker compose up -d
-#
-# Für den lokalen Build aus dem Quellcode:
+# Lokaler Build aus dem Quellcode:
 #   docker compose -f docker-compose.build.yml up -d --build
 
 services:
   haproxy-gui:
-    image: ghcr.io/bartelluis/haproxy-gui:latest
+    build: .
     container_name: haproxy-gui
     restart: unless-stopped
     ports:
       - "8080:8080"   # Web-GUI
-      - "80:80"       # optional: eingebetteter HAProxy (HTTP)
-      - "443:443"     # optional: eingebetteter HAProxy (HTTPS)
+      - "80:80"       # optional: eingebetteter HAProxy
+      - "443:443"     # optional: eingebetteter HAProxy
     environment:
       ADMIN_USER: admin
       ADMIN_PASSWORD: change-me        # unbedingt ändern!

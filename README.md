@@ -54,6 +54,10 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 **Vorgefertigtes Image von GHCR** (wird bei jedem Push auf `main` gebaut, amd64 + arm64):
 
 ```bash
+# Variante 1: Docker Compose (empfohlen) – nutzt das GHCR-Image, kein Build
+docker compose up -d
+
+# Variante 2: docker run
 docker run -d --name haproxy-gui \
   -p 8080:8080 -p 80:80 -p 443:443 \
   -e ADMIN_PASSWORD='sicheres-passwort' \
@@ -61,17 +65,10 @@ docker run -d --name haproxy-gui \
   ghcr.io/bartelluis/haproxy-gui:latest
 ```
 
-**Oder selbst bauen:**
+**Oder selbst aus dem Quellcode bauen:**
 
 ```bash
-docker compose up -d --build
-# oder ohne Compose:
-docker build -t haproxy-gui .
-docker run -d --name haproxy-gui \
-  -p 8080:8080 -p 80:80 -p 443:443 \
-  -e ADMIN_PASSWORD='sicheres-passwort' \
-  -v haproxy-gui-data:/data \
-  haproxy-gui
+docker compose -f docker-compose.build.yml up -d --build
 ```
 
 GUI öffnen: <http://localhost:8080> (Standard-Login: `admin` / Wert von `ADMIN_PASSWORD`)
