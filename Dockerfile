@@ -1,5 +1,7 @@
 FROM haproxy:2.9-alpine
 
+USER root
+
 # python3: Web-Backend | lego: Let's Encrypt mit DNS-Validierung | socat: HAProxy Runtime-Socket
 RUN apk add --no-cache python3 py3-pip lego socat bash curl \
     && python3 -m venv /opt/venv
