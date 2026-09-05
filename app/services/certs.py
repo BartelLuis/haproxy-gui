@@ -1,6 +1,8 @@
 import asyncio
+import glob
 import json
 import os
+import shlex
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -114,18 +116,56 @@ def cert_paths(cert):
 
 def pem_bytes(cert):
     """Kombiniertes PEM (Leaf + Intermediate + Key), wie HAProxy es erwartet."""
-    crt, key = cert_paths(cert)
-    if not (os.path.exists(crt) and os.path.exists(key)):
+    cert_dir = os.path.join(ACME_DIR, "certificates")
+    base = _base(cert)
+    name = (cert.get("name") or "").strip()
+    candidates = []
+    for prefix in [base, name, name.rsplit(".pem", 1)[0] if name.endswith(".pem") else name]:
+        if not prefix:
+            continue
+        candidates.extend(
+            [
+                os.path.join(cert_dir, prefix + ".crt"),
+                os.path.join(cert_dir, prefix + ".issuer.crt"),
+                os.path.join(cert_dir, prefix + ".chain.crt"),
+            ]
+        )
+    candidates.extend(glob.glob(os.path.join(cert_dir, base + "*.crt")))
+    seen = set()
+    cert_files = []
+    for path in candidates:
+        if not path or path in seen or not os.path.exists(path):
+            continue
+        seen.add(path)
+        with open(path, "rb") as f:
+            data = f.read()
+        if b"BEGIN CERTIFICATE" in data:
+            cert_files.append(path)
+
+    key_path = None
+    for suffix in (".key", ".private.key"):
+        for prefix in [base, name, name.rsplit(".pem", 1)[0] if name.endswith(".pem") else name]:
+            if not prefix:
+                continue
+            path = os.path.join(cert_dir, prefix + suffix)
+            if os.path.exists(path):
+                key_path = path
+                break
+        if key_path:
+            break
+    if not cert_files or not key_path:
         return None
+
     bundle = []
-    for path in (crt, os.path.splitext(crt)[0] + ".issuer.crt"):
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                data = f.read()
-            if data:
-                bundle.append(data.rstrip(b"\n") + b"\n")
-    with open(key, "rb") as f:
-        bundle.append(f.read().rstrip(b"\n") + b"\n")
+    for path in sorted(cert_files):
+        with open(path, "rb") as f:
+            data = f.read().strip()
+        if data:
+            bundle.append(data + b"\n")
+    with open(key_path, "rb") as f:
+        key = f.read().strip()
+    if key:
+        bundle.append(key + b"\n")
     return b"".join(bundle)
 
 
@@ -462,11 +502,16 @@ def deploy_cert(cert_id):
                 target = node["cert_dir"].rstrip("/") + "/" + fname
                 if node.get("is_local"):
                     os.makedirs(node["cert_dir"], exist_ok=True)
+                    try:
+                        os.remove(target)
+                    except FileNotFoundError:
+                        pass
                     with open(target, "wb") as f:
                         f.write(pem)
                     os.chmod(target, 0o600)
                 else:
                     sshclient.run_ssh(node, f"mkdir -p {node['cert_dir']}")
+                    sshclient.run_ssh(node, f"rm -f {shlex.quote(target)}")
                     sshclient.sftp_write(node, target, pem, mode=0o600)
                 log.append(f"Zertifikat nach {target} geschrieben")
                 ok, msg = deploysvc.reload_node(node)

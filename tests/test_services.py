@@ -197,7 +197,7 @@ def test_pem_bytes_includes_issuer_chain(env):
     cert_dir = certsvc.ACME_DIR
     import os
     os.makedirs(cert_dir, exist_ok=True)
-    cert = {"name": "example.com", "domains": '["example.com"]'}
+    cert = {"name": "wildcard.bartel.sh", "domains": '["*.bartel.sh"]'}
     base = certsvc._base(cert)
     crt = os.path.join(cert_dir, "certificates", base + ".crt")
     issuer = os.path.join(cert_dir, "certificates", base + ".issuer.crt")
