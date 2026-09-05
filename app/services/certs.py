@@ -294,8 +294,6 @@ def _cleanup_manual(cert):
 
 
 def _issue_manual(cert, renew):
-    import time as _time
-
     cert_id = cert["id"]
     _cleanup_manual(cert)
     _set(cert_id, status="waiting_dns", message="")
