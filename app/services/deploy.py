@@ -13,6 +13,36 @@ from . import validate as v
 MASTER_PID = "/run/haproxy/master.pid"
 
 
+def _group_cert_files(cert_files):
+    grouped = {}
+    for name, data in cert_files.items():
+        base = v.clean_name(os.path.splitext(name)[0])
+        grouped.setdefault(base, {})["crt" if name.endswith(".crt") else "key"] = data
+    return grouped
+
+
+def _write_cert_files(cert_dir, cert_files):
+    os.makedirs(cert_dir, exist_ok=True)
+    for base, payloads in _group_cert_files(cert_files).items():
+        for stale in (base + ".pem", base + ".crt", base + ".key"):
+            target = os.path.join(cert_dir, stale)
+            try:
+                os.remove(target)
+            except FileNotFoundError:
+                pass
+        if payloads.get("crt") is not None:
+            cert_target = os.path.join(cert_dir, base + ".crt")
+            with open(cert_target, "wb") as f:
+                f.write(payloads["crt"])
+            os.chmod(cert_target, 0o600)
+        if payloads.get("key") is not None:
+            key_target = os.path.join(cert_dir, base + ".key")
+            with open(key_target, "wb") as f:
+                f.write(payloads["key"])
+            os.chmod(key_target, 0o600)
+    return len(cert_files)
+
+
 def _local(argv, timeout=60):
     """Lokale Ausführung OHNE Shell (Argv-Liste, kein shell=True)."""
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
@@ -88,12 +118,7 @@ def deploy_node(cluster, node, validate_only=False, content=None,
         q_new, q_path, q_cert = shlex.quote(new_path), shlex.quote(path), shlex.quote(cert_dir)
 
         if node.get("is_local"):
-            os.makedirs(cert_dir, exist_ok=True)
-            for name, data in cert_files.items():
-                target = os.path.join(cert_dir, v.clean_name(name.rsplit(".pem", 1)[0]) + ".pem")
-                with open(target, "wb") as f:
-                    f.write(data)
-                os.chmod(target, 0o600)
+            _write_cert_files(cert_dir, cert_files)
             log.append(f"{len(cert_files)} Zertifikat(e) aktualisiert")
             with open(new_path, "w") as f:
                 f.write(cfg)
@@ -118,9 +143,14 @@ def deploy_node(cluster, node, validate_only=False, content=None,
             rc, out, err = sshclient.run_ssh(node, f"mkdir -p {q_cert}")
             if rc != 0:
                 return fail("SSH-Verbindung fehlgeschlagen: " + (err.strip() or out.strip()))
-            for name, data in cert_files.items():
-                fname = v.clean_name(name.rsplit(".pem", 1)[0]) + ".pem"
-                sshclient.sftp_write(node, f"{cert_dir.rstrip('/')}/{fname}", data, mode=0o600)
+            for base, payloads in _group_cert_files(cert_files).items():
+                for stale in (base + ".pem", base + ".crt", base + ".key"):
+                    target = f"{cert_dir.rstrip('/')}/{stale}"
+                    sshclient.run_ssh(node, f"rm -f {shlex.quote(target)}")
+                if payloads.get("crt") is not None:
+                    sshclient.sftp_write(node, f"{cert_dir.rstrip('/')}/{base}.crt", payloads["crt"], mode=0o600)
+                if payloads.get("key") is not None:
+                    sshclient.sftp_write(node, f"{cert_dir.rstrip('/')}/{base}.key", payloads["key"], mode=0o600)
             log.append(f"{len(cert_files)} Zertifikat(e) hochgeladen")
             sshclient.sftp_write(node, new_path, cfg.encode())
             log.append(f"Konfiguration nach {new_path} hochgeladen")
