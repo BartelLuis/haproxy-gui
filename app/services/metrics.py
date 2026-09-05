@@ -27,7 +27,7 @@ def _cpu_percent(line1, line2):
 def _parse_output(text):
     result = {"cpu_percent": None, "load": "", "mem": {}, "disk": {}}
     lines = text.splitlines()
-    cpu_lines = [line for line in lines if line.startswith("cpu ")]
+    cpu_lines = [cpu_line for cpu_line in lines if cpu_line.startswith("cpu ")]
     if len(cpu_lines) >= 2:
         result["cpu_percent"] = _cpu_percent(cpu_lines[0], cpu_lines[1])
     mem = {}
