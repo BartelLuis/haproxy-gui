@@ -7,6 +7,7 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 **Let's-Encrypt-Zertifikaten über DNS-Validierung (DNS-01)** – komplett in einem Docker-Container.
 
 ![CI](https://github.com/BartelLuis/haproxy-gui/actions/workflows/ci.yml/badge.svg)
+![GHCR](https://github.com/BartelLuis/haproxy-gui/actions/workflows/publish.yml/badge.svg)
 
 ![Architektur](docs/architektur.png)
 
@@ -45,6 +46,18 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 - **Tools:** TCP-Port-Scanner und Config-Vergleich zwischen zwei Nodes eines Clusters
 
 ## Schnellstart
+
+**Vorgefertigtes Image von GHCR** (wird bei jedem Push auf `main` gebaut, amd64 + arm64):
+
+```bash
+docker run -d --name haproxy-gui \
+  -p 8080:8080 -p 80:80 -p 443:443 \
+  -e ADMIN_PASSWORD='sicheres-passwort' \
+  -v haproxy-gui-data:/data \
+  ghcr.io/bartelluis/haproxy-gui:latest
+```
+
+**Oder selbst bauen:**
 
 ```bash
 docker compose up -d --build
@@ -123,8 +136,11 @@ python -m pytest tests/ -v
 3. **Container-Smoke-Test:** Container starten → GUI erreichbar → Login →
    Local-Cluster via API prüfen → eingebetteter HAProxy muss via Runtime-API antworten
 
-Um das CI-Badge in dieser Datei zu aktivieren, `DEIN-USER` im Badge-Link oben durch
-den eigenen GitHub-Nutzer ersetzen.d '{"validate_only": false}' http://localhost:8080/api/clusters/1/deploy
+**Image-Publishing** ([publish.yml](.github/workflows/publish.yml)) baut bei jedem Push
+auf `main` und bei Tags `v*` ein Multi-Arch-Image (linux/amd64 + linux/arm64) und lädt
+es nach **ghcr.io** hoch (`ghcr.io/bartelluis/haproxy-gui`). Tags: `latest`, Branch,
+`sha-<kurz>`, und bei Releases `v1.2.3`, `1.2`, `1`. Es werden nur die Standard-
+`GITHUB_TOKEN`-Rechte (`packages: write`) genutzt – kein zusätzliches Secret nötig.d '{"validate_only": false}' http://localhost:8080/api/clusters/1/deploy
 ```
 
 ## Remote-Nodes einbinden
