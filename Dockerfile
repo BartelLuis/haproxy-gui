@@ -17,7 +17,11 @@ WORKDIR /app
 COPY app ./app
 COPY bootstrap /bootstrap
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh \
+    && mkdir -p /data/haproxy /data/acme /run/haproxy \
+    && chown -R haproxy:haproxy /data /run/haproxy
+
+USER haproxy
 
 EXPOSE 8080 80 443
 VOLUME /data
