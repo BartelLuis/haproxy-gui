@@ -586,6 +586,25 @@
     </tr>`;
   }
 
+  function routeCondition(host, path) {
+    const parts = [];
+    const h = String(host || "").trim();
+    const p = String(path || "").trim();
+    if (h) parts.push(`{ hdr(host) -i ${h} }`);
+    if (p) parts.push(`{ path_beg ${p} }`);
+    return parts.length ? `if ${parts.join(" ")}` : "";
+  }
+
+  function routeRow(clusterId, route) {
+    route = route || {};
+    return `<tr>
+      <td><select class="route-backend">${backendNameOptions(clusterId, route.backend)}</select></td>
+      <td><input class="route-host" placeholder="app.example.com" value="${esc(route.host || "")}"></td>
+      <td><input class="route-path" placeholder="/api" value="${esc(route.path || "")}"></td>
+      <td class="c"><button type="button" class="btn sm danger del-row">✕</button></td>
+    </tr>`;
+  }
+
   App.editFrontend = function (id) {
     if (!state.clusters.length) {
       toast("Bitte zuerst einen Cluster anlegen", "err");
@@ -621,6 +640,11 @@
       </div>
       <label>Zertifikat<select name="cert_id">${certOptions(f ? f.cert_id : null)}</select></label>
       <label>Default-Backend<select name="default_backend_id" id="fe-backend"></select></label>
+      <h4>URL-Routen (einfach)</h4>
+      <p class="muted">Host, Pfad oder beides auf ein Backend weiterleiten. Beispiel: app.example.com → app, /admin → admin.</p>
+      <table class="data"><thead><tr><th>Backend</th><th>Host</th><th>Pfad</th><th></th></tr></thead>
+        <tbody id="route-rows"></tbody></table>
+      <button type="button" class="btn sm" id="add-route">+ URL-Route</button>
       <h4>ACLs</h4>
       <table class="data"><thead><tr><th>Name</th><th>Kriterium</th><th>Wert</th><th></th></tr></thead>
         <tbody id="acl-rows"></tbody></table>
@@ -656,6 +680,7 @@
 
     const aclBody = $("#acl-rows", form);
     const ruleBody = $("#rule-rows", form);
+    const routeBody = $("#route-rows", form);
     acls.forEach((a) => aclBody.insertAdjacentHTML("beforeend", aclRow(a)));
     if (!acls.length) aclBody.innerHTML = aclRow();
     rules.forEach((r) => ruleBody.insertAdjacentHTML("beforeend", ruleRow(cid0, r)));
@@ -666,6 +691,12 @@
         "beforeend",
         ruleRow(parseInt($("#fe-cluster", form).value, 10))
       );
+    $("#add-route", form).onclick = () =>
+      routeBody.insertAdjacentHTML(
+        "beforeend",
+        routeRow(parseInt($("#fe-cluster", form).value, 10))
+      );
+    if (!routeBody.children.length) routeBody.innerHTML = routeRow(cid0);
 
     form.onsubmit = async (e) => {
       e.preventDefault();
@@ -677,6 +708,17 @@
           value: $(".acl-value", tr).value.trim(),
         }))
         .filter((a) => a.name && a.criterion);
+      const routeList = $$("#route-rows tr", form)
+        .map((tr) => ({
+          backend: $(".route-backend", tr).value,
+          host: $(".route-host", tr).value.trim(),
+          path: $(".route-path", tr).value.trim(),
+        }))
+        .filter((r) => r.backend && (r.host || r.path))
+        .map((r) => ({
+          backend: r.backend,
+          condition: routeCondition(r.host, r.path),
+        }));
       const ruleList = $$("#rule-rows tr", form)
         .map((tr) => ({
           backend: $(".rule-backend", tr).value,
@@ -696,7 +738,7 @@
           ? parseInt(fd.get("default_backend_id"), 10)
           : null,
         acls: aclList,
-        rules: ruleList,
+        rules: [...routeList, ...ruleList],
         extra: fd.get("extra") || "",
       };
       try {

@@ -78,6 +78,33 @@ def test_ssl_frontend_requires_cert(env, cluster):
         configgen.generate_config(cluster["cluster"], cluster["node"])
 
 
+def test_generate_route_rules(env, cluster):
+    db = env["db"]
+    be_app = db.execute(
+        "INSERT INTO backends (cluster_id, name, mode, balance) VALUES (?, 'app', 'http', 'roundrobin')",
+        (cluster["cluster"]["id"],),
+    )
+    be_admin = db.execute(
+        "INSERT INTO backends (cluster_id, name, mode, balance) VALUES (?, 'admin', 'http', 'roundrobin')",
+        (cluster["cluster"]["id"],),
+    )
+    db.execute(
+        "INSERT INTO frontends (cluster_id, name, port, default_backend_id, rules)"
+        " VALUES (?, 'http_in', 80, ?, ?)",
+        (
+            cluster["cluster"]["id"],
+            be_app,
+            '[{' 
+            '"backend": "app", "condition": "if { hdr(host) -i app.example.com }"},'
+            '{"backend": "admin", "condition": "if { path_beg /admin }"}'
+            ']',
+        ),
+    )
+    cfg = configgen.generate_config(cluster["cluster"], cluster["node"])
+    assert "use_backend app if { hdr(host) -i app.example.com }" in cfg
+    assert "use_backend admin if { path_beg /admin }" in cfg
+
+
 def test_extra_blocks(env, cluster):
     db = env["db"]
     db.execute(

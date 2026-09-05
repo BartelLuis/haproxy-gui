@@ -85,6 +85,35 @@ docker compose -f docker-compose.build.yml up -d --build
 
 GUI öffnen: <http://localhost:8080> (Standard-Login: `admin` / Wert von `ADMIN_PASSWORD`)
 
+## Einfacher Reverse Proxy
+
+Ein minimaler Reverse-Proxy kann mit einem Frontend und einem Backend aufgebaut werden:
+
+```haproxy
+frontend http_in
+    bind *:80
+    mode http
+    default_backend app_backend
+
+backend app_backend
+    mode http
+    balance roundrobin
+    option httpchk GET /
+    server app1 127.0.0.1:8080 check
+```
+
+Das ist der klassische Grundaufbau für das Routing von HTTP-Anfragen auf einen internen Dienst wie eine Webanwendung oder API. In dieser GUI kannst du das über die Bereiche Frontends und Backends konfigurieren, ohne die Datei manuell zu bearbeiten.
+
+### Mehrere Backends per Host oder Pfad
+
+Im Frontend-Dialog gibt es jetzt eine einfache URL-Routing-Funktion:
+
+- `app.example.com` → Backend `app`
+- `/admin` → Backend `admin`
+- `api.example.com` + `/api` → Backend `api`
+
+Damit lassen sich mehrere Backends mit unterschiedlichen URLs ohne manuelle ACLs konfigurieren. HAProxy erzeugt die dafür nötigen `use_backend`-Regeln automatisch.
+
 ## Umgebungsvariablen
 
 | Variable                | Standard | Beschreibung                                   |
