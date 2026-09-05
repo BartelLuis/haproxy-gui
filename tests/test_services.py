@@ -190,6 +190,32 @@ def test_technitium_env_validation(env):
     assert os.path.exists(env_map["EXEC_PATH"])
 
 
+def test_pem_bytes_includes_issuer_chain(env):
+    import importlib
+    import app.services.certs as certsvc
+    importlib.reload(certsvc)
+    cert_dir = certsvc.ACME_DIR
+    import os
+    os.makedirs(cert_dir, exist_ok=True)
+    cert = {"name": "example.com", "domains": '["example.com"]'}
+    base = certsvc._base(cert)
+    crt = os.path.join(cert_dir, "certificates", base + ".crt")
+    issuer = os.path.join(cert_dir, "certificates", base + ".issuer.crt")
+    key = os.path.join(cert_dir, "certificates", base + ".key")
+    os.makedirs(os.path.dirname(crt), exist_ok=True)
+    with open(crt, "wb") as f:
+        f.write(b"-----BEGIN CERTIFICATE-----\nLEAF\n-----END CERTIFICATE-----\n")
+    with open(issuer, "wb") as f:
+        f.write(b"-----BEGIN CERTIFICATE-----\nINTERMEDIATE\n-----END CERTIFICATE-----\n")
+    with open(key, "wb") as f:
+        f.write(b"-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n")
+    bundle = certsvc.pem_bytes(cert)
+    assert b"LEAF" in bundle
+    assert b"INTERMEDIATE" in bundle
+    assert b"KEY" in bundle
+    assert bundle.index(b"LEAF") < bundle.index(b"INTERMEDIATE") < bundle.index(b"KEY")
+
+
 def test_manual_challenge_flow(env):
     import importlib
     import app.services.certs as certsvc

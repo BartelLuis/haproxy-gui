@@ -113,17 +113,20 @@ def cert_paths(cert):
 
 
 def pem_bytes(cert):
-    """Kombiniertes PEM (Zertifikat + Chain + Key), wie HAProxy es erwartet."""
+    """Kombiniertes PEM (Leaf + Intermediate + Key), wie HAProxy es erwartet."""
     crt, key = cert_paths(cert)
     if not (os.path.exists(crt) and os.path.exists(key)):
         return None
-    with open(crt, "rb") as f:
-        c = f.read()
+    bundle = []
+    for path in (crt, os.path.splitext(crt)[0] + ".issuer.crt"):
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                data = f.read()
+            if data:
+                bundle.append(data.rstrip(b"\n") + b"\n")
     with open(key, "rb") as f:
-        k = f.read()
-    if not c.endswith(b"\n"):
-        c += b"\n"
-    return c + k
+        bundle.append(f.read().rstrip(b"\n") + b"\n")
+    return b"".join(bundle)
 
 
 def cluster_cert_files(cluster_id):
