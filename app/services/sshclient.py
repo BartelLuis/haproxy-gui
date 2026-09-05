@@ -1,6 +1,35 @@
+import base64
 import io
+import os
 
 import paramiko
+
+from .. import db as dbmod
+
+KNOWN_HOSTS = os.path.join(dbmod.DATA_DIR, "known_hosts")
+
+
+class _VerifyHostKey(paramiko.MissingHostKeyPolicy):
+    """TOFU: bekannte Keys akzeptieren, neue speichern, geänderte ablehnen."""
+
+    def missing_host_key(self, client, hostname, key):
+        known = paramiko.HostKeys()
+        if os.path.exists(KNOWN_HOSTS):
+            known.load(KNOWN_HOSTS)
+        ktype = key.get_name()
+        if hostname in known and ktype in known[hostname]:
+            if known[hostname][ktype] == key:
+                return
+            raise paramiko.SSHException(
+                f"Host-Key für {hostname} hat sich geändert – möglicher MITM-Angriff!"
+            )
+        known.add(hostname, ktype, key)
+        os.makedirs(dbmod.DATA_DIR, exist_ok=True)
+        known.save(KNOWN_HOSTS)
+        try:
+            os.chmod(KNOWN_HOSTS, 0o600)
+        except OSError:
+            pass
 
 
 def _load_key(text):
@@ -13,9 +42,29 @@ def _load_key(text):
     raise ValueError("SSH-Schlüssel ungültig: " + "; ".join(errors))
 
 
+def _decode_secret(value):
+    """Entschlüsselt enc:-Werte; erkennt und dekodiert zusätzlich Base64-Altbestand."""
+    from .. import auth
+    plain = auth.decrypt_secret(value or "")
+    if not plain:
+        return plain
+    # Base64-kodierte Altbestände / YAML-Artefakte tolerieren
+    if not plain.startswith("-----BEGIN") and "\n" not in plain:
+        try:
+            decoded = base64.b64decode(plain, validate=True).decode()
+            if decoded.startswith("-----BEGIN"):
+                return decoded
+        except Exception:
+            pass
+    return plain
+
+
 def ssh_connect(node, timeout=10):
+    from .. import auth
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.set_missing_host_key_policy(_VerifyHostKey())
+    ssh_key = _decode_secret(node.get("ssh_key") or "")
+    ssh_password = auth.decrypt_secret(node.get("ssh_password") or "")
     kwargs = {
         "hostname": node["host"],
         "port": int(node.get("ssh_port") or 22),
@@ -26,12 +75,12 @@ def ssh_connect(node, timeout=10):
         "allow_agent": False,
         "look_for_keys": False,
     }
-    if node.get("ssh_key"):
-        kwargs["pkey"] = _load_key(node["ssh_key"])
-        if node.get("ssh_password"):
-            kwargs["passphrase"] = node["ssh_password"]
-    elif node.get("ssh_password"):
-        kwargs["password"] = node["ssh_password"]
+    if ssh_key:
+        kwargs["pkey"] = _load_key(ssh_key)
+        if ssh_password:
+            kwargs["passphrase"] = ssh_password
+    elif ssh_password:
+        kwargs["password"] = ssh_password
     client.connect(**kwargs)
     return client
 

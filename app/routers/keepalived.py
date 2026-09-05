@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from .. import auth, db as dbmod
 from ..db import audit
 from ..services import keepalived as ksvc
+from ..services import validate as v
 
 router = APIRouter(prefix="/api/clusters/{cid}/keepalived", tags=["keepalived"])
 
@@ -38,6 +39,13 @@ def get_keepalived(cid: int, user=Depends(auth.require_auth)):
 @router.put("")
 def put_keepalived(cid: int, body: KeepalivedIn, user=Depends(auth.require_auth)):
     _get_cluster(cid)
+    try:
+        if body.vip:
+            v.clean_vip(body.vip, "VIP")
+        v.clean_iface(body.iface or "eth0", "Interface")
+        v.no_newline(body.auth_pass, "auth_pass")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     for n in body.nodes:
         if n.state not in ("MASTER", "BACKUP"):
             raise HTTPException(400, "state muss MASTER oder BACKUP sein")

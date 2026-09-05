@@ -9,6 +9,11 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 ![CI](https://github.com/BartelLuis/haproxy-gui/actions/workflows/ci.yml/badge.svg)
 ![GHCR](https://github.com/BartelLuis/haproxy-gui/actions/workflows/publish.yml/badge.svg)
 
+> 📖 **Dokumentation:** Ausführliche Anleitungen findest du im **[Wiki](wiki/Home.md)** –
+> [Installation](wiki/Installation.md) · [Quickstart](wiki/Getting-Started.md) ·
+> [Host anlegen](wiki/Host-anlegen.md) · [Sicherheit & MFA](wiki/Sicherheit.md) ·
+> [REST-API](wiki/API.md) · [Entwicklung](wiki/Entwicklung.md)
+
 ## Features
 
 - **Multi-Cluster:** Beliebig viele HAProxy-Cluster mit je mehreren Nodes
@@ -32,9 +37,10 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 - **Live-Monitoring** über die HAProxy Runtime-API: Status aller Proxys/Server,
   Server zur Laufzeit aktivieren / drainen / in Wartung nehmen
 - **Auth & Benutzerverwaltung:** mehrere Benutzer mit Rollen
-  (`admin` / `operator` / `viewer`), PBKDF2-Passwort-Hashing, Session-Cookies +
-  Bearer-Token, **API-Tokens** (`hg_…`) für CI/CD-Automatisierung,
-  **LDAP / Active Directory Login** mit Gruppen→Rollen-Mapping
+  (`admin` / `operator` / `viewer`), PBKDF2-Passwort-Hashing, **MFA (TOTP)**,
+  Session-Cookies + Bearer-Token, **API-Tokens** (`hg_…`) für CI/CD-Automatisierung,
+  **LDAP / Active Directory Login** mit Gruppen→Rollen-Mapping,
+  Login-Rate-Limiting, verschlüsselte Secrets in der DB, SSH-Host-Key-Verifizierung
 - **Audit-Log:** alle Änderungen (Logins, Deploys, CRUD) nachvollziehbar
 - **Config-Versionierung:** jeder Deploy wird versioniert (30 Versionen pro Node),
   Diff-Ansicht gegen die aktuelle Config, **Rollback** mit einem Klick

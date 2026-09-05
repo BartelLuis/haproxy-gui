@@ -1,8 +1,14 @@
 import csv
 import io
+import shlex
 import socket
 
 from . import sshclient
+
+
+def _quote_cmd(cmd):
+    """Ein Runtime-Kommando sicher in ein Shell-echo einbetten (einfache Quotes)."""
+    return shlex.quote(cmd)
 
 
 def _read_all(sock):
@@ -38,14 +44,25 @@ def _tcp_cmd(host, port, cmd, timeout=5):
 
 
 def _ssh_cmd(node, cmd, timeout=15):
+    # cmd und socket_path quoten -> keine Shell-/Runtime-Injection möglich
+    quoted = _quote_cmd(cmd)
+    socket_path = shlex.quote(node["socket_path"])
     rc, out, err = sshclient.run_ssh(
-        node, f'echo "{cmd}" | socat stdio {node["socket_path"]}', timeout=timeout
+        node, f"printf '%s\\n' {quoted} | socat stdio {socket_path}", timeout=timeout
     )
     if rc != 0 and not out:
         raise RuntimeError(
             err.strip() or "socat fehlgeschlagen – ist socat auf dem Node installiert?"
         )
     return out
+
+
+def _sanitize_token(value):
+    """Einzelnes Runtime-Token (backend/server/table/key) auf sichere Zeichen prüfen."""
+    value = (value or "").strip()
+    if not value or any(c in value for c in "\n\r \t\"'\\`$;|&<>"):
+        raise ValueError(f"Ungültiger Runtime-Wert: {value!r}")
+    return value
 
 
 def runtime_cmd(node, cmd):
@@ -85,4 +102,11 @@ def show_stat(node):
 
 
 def set_server_state(node, backend, server, state):
+    backend = _sanitize_token(backend)
+    server = _sanitize_token(server)
+    state = _sanitize_token(state)
     return runtime_cmd(node, f"set server {backend}/{server} state {state}")
+
+
+def sanitize_token(value):
+    return _sanitize_token(value)

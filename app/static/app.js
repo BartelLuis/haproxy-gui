@@ -1790,6 +1790,87 @@
     };
   };
 
+  // ---------------- Mein Konto / MFA ----------------
+  App.accountSettings = async function () {
+    let mfa;
+    try {
+      mfa = await api("/api/users/me/mfa");
+    } catch (e) {
+      mfa = { enabled: false };
+    }
+    const { close, form } = openModal(
+      "Mein Konto",
+      `
+      <p><b>${esc(state.user ? state.user.username : "")}</b>
+         <span class="muted">(${esc(state.user ? state.user.role : "")})</span></p>
+      <h4>Zwei-Faktor-Authentifizierung (TOTP)</h4>
+      <div id="mfa-area">
+        <p>Status: ${mfa.enabled ? '<span class="badge ok">Aktiviert</span>' : '<span class="badge muted">Deaktiviert</span>'}</p>
+        <div class="btn-row">
+          ${mfa.enabled
+            ? '<button type="button" class="btn danger" id="mfa-disable">MFA deaktivieren</button>'
+            : '<button type="button" class="btn primary" id="mfa-setup">MFA einrichten</button>'}
+        </div>
+        <div id="mfa-setup-area"></div>
+      </div>
+      <p class="muted">MFA schützt dein Konto mit einem 6-stelligen Code aus einer Authenticator-App
+         (z. B. Aegis, Bitwarden, Google Authenticator).</p>`,
+      "Schließen"
+    );
+    form.querySelector('button[type="submit"]').style.display = "none";
+    form.onsubmit = (e) => e.preventDefault();
+
+    const setupBtn = $("#mfa-setup", form);
+    if (setupBtn) {
+      setupBtn.onclick = async () => {
+        try {
+          const res = await api("/api/users/me/mfa/setup", "POST");
+          $("#mfa-setup-area", form).innerHTML = `
+            <p>1. Authenticator-App öffnen und diesen QR-Code scannen:</p>
+            ${res.qr ? `<div class="c"><img src="${res.qr}" alt="QR" style="width:180px;border-radius:8px"></div>` : ""}
+            <p>Oder Secret manuell eingeben:</p>
+            <div class="token-display c">${esc(res.secret)}</div>
+            <p style="margin-top:10px">2. Den 6-stelligen Code aus der App eingeben:</p>
+            <div class="row"><input id="mfa-code" inputmode="numeric" placeholder="123456" maxlength="6"></div>
+            <div class="btn-row"><button type="button" class="btn primary" id="mfa-confirm">Aktivieren</button></div>`;
+          $("#mfa-confirm", form).onclick = async () => {
+            try {
+              const r = await api("/api/users/me/mfa/confirm", "POST", {
+                code: $("#mfa-code", form).value.trim(),
+              });
+              if (r.ok) {
+                toast("MFA aktiviert");
+                close();
+                App.accountSettings();
+              } else {
+                toast(r.message, "err");
+              }
+            } catch (e) {
+              toast(e.message, "err");
+            }
+          };
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      };
+    }
+    const disableBtn = $("#mfa-disable", form);
+    if (disableBtn) {
+      disableBtn.onclick = async () => {
+        const code = prompt("Zum Deaktivieren bitte den aktuellen 6-stelligen MFA-Code eingeben:");
+        if (code === null) return;
+        try {
+          await api("/api/users/me/mfa/disable", "POST", { code: code.trim() });
+          toast("MFA deaktiviert");
+          close();
+          App.accountSettings();
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      };
+    }
+  };
+
   // ---------------- Login & Init ----------------
   function applyUser(user) {
     state.user = user;
@@ -1800,6 +1881,7 @@
   }
 
   async function init() {
+    let mfaShown = false;
     $("#login-form").onsubmit = async (e) => {
       e.preventDefault();
       $("#login-error").textContent = "";
@@ -1807,7 +1889,18 @@
         const res = await api("/api/auth/login", "POST", {
           username: $("#login-user").value,
           password: $("#login-pass").value,
+          totp: $("#login-totp").value.trim(),
         });
+        if (res.mfa_required) {
+          // MFA-Code nötig -> Feld einblenden
+          if (!mfaShown) {
+            $("#login-totp").classList.remove("hidden");
+            $("#login-totp").focus();
+            mfaShown = true;
+          }
+          $("#login-error").textContent = "Bitte MFA-Code eingeben.";
+          return;
+        }
         localStorage.setItem("hg_token", res.token);
         applyUser({ username: res.username, role: res.role });
         showApp();
@@ -1816,6 +1909,7 @@
         $("#login-error").textContent = err.message;
       }
     };
+    $("#account-btn").onclick = () => App.accountSettings();
     $("#logout-btn").onclick = async () => {
       try {
         await api("/api/auth/logout", "POST");

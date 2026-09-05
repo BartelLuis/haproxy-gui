@@ -107,8 +107,11 @@ def clear_table(nid: int, body: TableIn):
     if not node:
         raise HTTPException(404, "Node nicht gefunden")
     try:
-        out = runtimesvc.runtime_cmd(node, f"clear table {body.table}")
+        table = runtimesvc.sanitize_token(body.table)
+        out = runtimesvc.runtime_cmd(node, f"clear table {table}")
         return {"ok": True, "message": out.strip()}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     except Exception as exc:
         raise HTTPException(502, str(exc))
 
@@ -172,10 +175,16 @@ def map_entry(nid: int, body: MapEntryIn):
     node = dbmod.one("SELECT * FROM nodes WHERE id = ?", (nid,))
     if not node:
         raise HTTPException(404, "Node nicht gefunden")
+    try:
+        map_id = runtimesvc.sanitize_token(body.map_id)
+        key = runtimesvc.sanitize_token(body.key)
+        value = runtimesvc.sanitize_token(body.value)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if body.action == "add":
-        cmd = f"add map #{body.map_id} {body.key} {body.value}"
+        cmd = f"add map #{map_id} {key} {value}"
     else:
-        cmd = f"del map #{body.map_id} {body.key}"
+        cmd = f"del map #{map_id} {key}"
     try:
         out = runtimesvc.runtime_cmd(node, cmd)
         return {"ok": True, "message": out.strip()}

@@ -13,6 +13,8 @@
       <p class="muted">Multi-Cluster Verwaltung</p>
       <input id="login-user" placeholder="Benutzername" autocomplete="username" required>
       <input id="login-pass" type="password" placeholder="Passwort" autocomplete="current-password" required>
+      <input id="login-totp" type="text" inputmode="numeric" placeholder="MFA-Code (falls aktiviert)"
+             autocomplete="one-time-code" class="hidden">
       <button type="submit" class="btn primary block">Anmelden</button>
       <div id="login-error" class="error-text"></div>
     </form>
@@ -37,6 +39,7 @@
         <a href="#/users" data-route="users" data-admin="1">Benutzer</a>
       </nav>
       <div id="user-info" class="muted" style="margin-bottom:10px;font-size:12px"></div>
+      <button id="account-btn" class="btn ghost" style="margin-bottom:6px">Mein Konto</button>
       <button id="logout-btn" class="btn ghost">Abmelden</button>
     </aside>
     <main id="content"></main>

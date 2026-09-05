@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from .. import auth, db as dbmod
 from ..db import audit
+from ..services import validate as v
 
 router = APIRouter(prefix="/api/frontends", tags=["frontends"])
 
@@ -28,6 +29,19 @@ class FrontendIn(BaseModel):
 def _validate(body: FrontendIn):
     if body.mode not in ("http", "tcp"):
         raise HTTPException(400, "Mode muss http oder tcp sein")
+    try:
+        v.clean_name(body.name, "Frontend-Name")
+        v.no_newline(body.bind_ip, "bind_ip")
+        v.no_newline(body.extra, "extra")
+        for acl in body.acls:
+            v.clean_name(acl.get("name", ""), "ACL-Name")
+            v.no_newline(acl.get("criterion", ""), "ACL-Kriterium")
+            v.no_newline(acl.get("value", ""), "ACL-Wert")
+        for rule in body.rules:
+            v.no_newline(rule.get("backend", ""), "Regel-Backend")
+            v.no_newline(rule.get("condition", ""), "Regel-Bedingung")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if body.use_ssl and not body.cert_id:
         raise HTTPException(400, "SSL aktiviert, aber kein Zertifikat gewählt")
     if body.cert_id and not dbmod.one(

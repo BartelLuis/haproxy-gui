@@ -95,11 +95,20 @@ def _base(cert):
     return domains[0].replace("*.", "_.")
 
 
+def _safe_path(base_dir, filename):
+    """Verhindert Path-Traversal: Ergebnis muss innerhalb von base_dir liegen."""
+    full = os.path.realpath(os.path.join(base_dir, filename))
+    if not full.startswith(os.path.realpath(base_dir) + os.sep):
+        raise ValueError(f"Ungültiger Dateiname: {filename!r}")
+    return full
+
+
 def cert_paths(cert):
     base = _base(cert)
+    cert_dir = os.path.join(ACME_DIR, "certificates")
     return (
-        os.path.join(ACME_DIR, "certificates", base + ".crt"),
-        os.path.join(ACME_DIR, "certificates", base + ".key"),
+        _safe_path(cert_dir, base + ".crt"),
+        _safe_path(cert_dir, base + ".key"),
     )
 
 
@@ -138,9 +147,9 @@ def cluster_cert_files(cluster_id):
 
 
 def remove_cert_files(cert):
-    crt, key = cert_paths(cert)
+    cert_dir = os.path.join(ACME_DIR, "certificates")
     for suffix in (".crt", ".key", ".issuer.crt", ".json"):
-        path = os.path.join(ACME_DIR, "certificates", _base(cert) + suffix)
+        path = _safe_path(cert_dir, _base(cert) + suffix)
         if os.path.exists(path):
             try:
                 os.remove(path)
@@ -186,7 +195,7 @@ def _write_technitium_hook():
     with open(path, "w", newline="\n") as f:
         f.write(TECHNITIUM_HOOK)
     try:
-        os.chmod(path, 0o755)
+        os.chmod(path, 0o700)
     except OSError:
         pass
     return path
@@ -373,7 +382,9 @@ def issue(cert_id, renew=False):
             env.update(_technitium_env(cfg))
         else:
             cmd += ["--dns", provider]
-            env.update({k: v for k, v in cfg.items() if v})
+            # Nur die für diesen Provider deklarierten Env-Keys durchreichen
+            allowed = {k for k, _ in PROVIDERS.get(provider, {}).get("env", [])}
+            env.update({k: v for k, v in cfg.items() if v and k in allowed})
     except ValueError as exc:
         _set(cert_id, status="error", message=str(exc))
         return

@@ -1,6 +1,7 @@
 import json
 
 from .. import db as dbmod
+from . import validate as v
 
 
 def _indent_block(text, pad="    "):
@@ -34,8 +35,10 @@ def generate_config(cluster, node=None):
     lines.append("    log stdout format raw local0 info")
     lines.append("    maxconn 4096")
     if node and node.get("socket_type") == "tcp":
+        # Niemals auf * binden – der Socket hat keine Authentifizierung.
+        bind_addr = node.get("socket_host") or "127.0.0.1"
         lines.append(
-            f"    stats socket ipv4@*:{node.get('socket_port') or 9999} level admin"
+            f"    stats socket ipv4@{bind_addr}:{node.get('socket_port') or 9999} level operator"
         )
     else:
         sock = (node or {}).get("socket_path") or "/var/run/haproxy/admin.sock"
@@ -62,6 +65,8 @@ def generate_config(cluster, node=None):
     lines.append("")
 
     for fe in fe_list:
+        v.clean_name(fe["name"], "Frontend-Name")
+        v.no_newline(fe["bind_ip"], "bind_ip")
         lines.append(f"frontend {fe['name']}")
         bind = f"    bind {fe['bind_ip']}:{fe['port']}"
         if fe["use_ssl"]:
@@ -93,16 +98,21 @@ def generate_config(cluster, node=None):
         lines.append("")
 
     for be in be_list:
+        v.clean_name(be["name"], "Backend-Name")
         lines.append(f"backend {be['name']}")
         lines.append(f"    mode {be['mode']}")
         lines.append(f"    balance {be['balance']}")
         if be.get("check_path") and be["mode"] == "http":
+            v.no_newline(be["check_path"], "check_path")
             lines.append(f"    option httpchk GET {be['check_path']}")
             if be.get("check_expect"):
+                v.no_newline(be["check_expect"], "check_expect")
                 lines.append(f"    http-check expect {be['check_expect']}")
         for s in dbmod.q(
             "SELECT * FROM servers WHERE backend_id = ? ORDER BY name", (be["id"],)
         ):
+            v.clean_name(s["name"], "Server-Name")
+            v.clean_host(s["host"], "Server-Host")
             parts = ["    server", s["name"], f"{s['host']}:{s['port']}"]
             if s["check"]:
                 parts.append("check")

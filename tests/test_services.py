@@ -105,6 +105,64 @@ def test_ldap_role_mapping(services):
     assert svc._role_from_groups([], st2) == "operator"
 
 
+def test_totp_roundtrip(env):
+    import importlib
+    import app.services.totp as totp
+    importlib.reload(totp)
+    db = env["db"]
+    uid = db.one("SELECT id FROM users WHERE username='admin'")["id"]
+    secret = totp.start_setup(uid)
+    assert not totp.is_enabled(uid)
+    code = totp._totp(secret)
+    ok, msg = totp.confirm_setup(uid, code)
+    assert ok, msg
+    assert totp.is_enabled(uid)
+    assert totp.verify(uid, totp._totp(secret))
+    assert not totp.verify(uid, "000000")
+    # Deaktivieren erfordert gültigen Code
+    assert totp.verify(uid, totp._totp(secret))
+    totp.disable(uid)
+    assert not totp.is_enabled(uid)
+
+
+def test_validate_module(env):
+    from app.services import validate as v
+    assert v.clean_name("lb-01.example_com") == "lb-01.example_com"
+    assert v.clean_path("/etc/haproxy/haproxy.cfg")
+    assert v.clean_domain("*.example.com")
+    for bad in ["bad;name", "../etc", "a b", "x;rm -rf /", "$(evil)"]:
+        for fn in (v.clean_name, v.clean_path, v.clean_domain, v.clean_host):
+            try:
+                fn(bad)
+                raise AssertionError(f"{fn.__name__} akzeptierte {bad!r}")
+            except ValueError:
+                pass
+    import pytest
+    with pytest.raises(ValueError):
+        v.no_newline("zeile1\nzeile2")
+
+
+def test_secret_encryption(env):
+    auth = env["auth"]
+    enc = auth.encrypt_secret("geheim-token-123")
+    assert enc.startswith("enc:")
+    assert enc != "geheim-token-123"
+    assert auth.decrypt_secret(enc) == "geheim-token-123"
+    # Klartext-Altbestand bleibt lesbar
+    assert auth.decrypt_secret("plain") == "plain"
+
+
+def test_login_rate_limit(env):
+    auth = env["auth"]
+    key = "1.2.3.4|admin"
+    for _ in range(auth.LOGIN_MAX):
+        assert auth.login_rate_check(key)
+        auth.login_failed(key)
+    assert not auth.login_rate_check(key)  # jetzt gesperrt
+    auth.login_succeeded(key)
+    assert auth.login_rate_check(key)  # nach Erfolg wieder frei
+
+
 def test_providers_include_technitium_and_manual(env):
     import importlib
     import app.services.certs as certsvc

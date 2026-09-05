@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from .. import auth, db as dbmod
 from ..db import audit
 from ..services import certs as certsvc
+from ..services import validate as v
 
 router = APIRouter(prefix="/api", tags=["certificates"])
 
@@ -39,7 +40,11 @@ def list_certs():
 def create_cert(body: CertIn, user=Depends(auth.require_auth)):
     if body.dns_provider not in certsvc.PROVIDERS:
         raise HTTPException(400, "Unbekannter DNS-Provider")
-    domains = [d.strip().lower() for d in body.domains if d.strip()]
+    try:
+        name = v.clean_name(body.name, "Zertifikatsname")
+        domains = [v.clean_domain(d.strip().lower(), "Domain") for d in body.domains if d.strip()]
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if not domains:
         raise HTTPException(400, "Mindestens eine Domain erforderlich")
     try:
@@ -47,13 +52,13 @@ def create_cert(body: CertIn, user=Depends(auth.require_auth)):
             "INSERT INTO certificates (name, domains, email, dns_provider,"
             " provider_config, auto_renew) VALUES (?,?,?,?,?,?)",
             (
-                body.name, json.dumps(domains), body.email, body.dns_provider,
+                name, json.dumps(domains), body.email, body.dns_provider,
                 json.dumps(body.provider_config), int(body.auto_renew),
             ),
         )
     except Exception:
         raise HTTPException(400, "Zertifikatsname existiert bereits")
-    audit(user["username"], "cert.create", body.name)
+    audit(user["username"], "cert.create", name)
     certsvc.issue_background(cid)
     return {"id": cid}
 

@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from .. import auth, db as dbmod
 from ..db import audit
+from ..services import validate as v
 
 router = APIRouter(prefix="/api/backends", tags=["backends"])
 
@@ -62,6 +63,16 @@ def list_backends(cluster_id: int | None = None):
 def create_backend(body: BackendIn, user=Depends(auth.require_auth)):
     if body.mode not in ("http", "tcp"):
         raise HTTPException(400, "Mode muss http oder tcp sein")
+    try:
+        v.clean_name(body.name, "Backend-Name")
+        v.no_newline(body.check_path, "check_path")
+        v.no_newline(body.check_expect, "check_expect")
+        v.no_newline(body.extra, "extra")
+        for s in body.servers:
+            v.clean_name(s.name, "Server-Name")
+            v.clean_host(s.host, "Server-Host")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     try:
         bid = dbmod.execute(
             "INSERT INTO backends (cluster_id, name, mode, balance, check_path,"

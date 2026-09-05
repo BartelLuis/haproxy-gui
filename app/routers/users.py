@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from .. import auth
 from .. import db as dbmod
 from ..db import audit
+from ..services import totp as totpsvc
 
 router = APIRouter(prefix="/api", tags=["users"])
 
@@ -118,3 +119,45 @@ def list_audit(user=Depends(auth.require_role("admin")), limit: int = 200):
     return dbmod.q(
         "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
     )
+
+
+# ---------------- MFA (TOTP) ----------------
+
+class TotpConfirmIn(BaseModel):
+    code: str
+
+
+@router.get("/users/me/mfa")
+def mfa_status(user=Depends(auth.require_auth)):
+    return {"enabled": totpsvc.is_enabled(user["id"])}
+
+
+@router.post("/users/me/mfa/setup")
+def mfa_setup(user=Depends(auth.require_auth)):
+    if user["id"] <= 0:
+        raise HTTPException(400, "MFA nur für lokale Benutzer")
+    secret = totpsvc.start_setup(user["id"])
+    uri = totpsvc.provisioning_uri(user["username"], secret)
+    return {
+        "secret": secret,
+        "uri": uri,
+        "qr": totpsvc.qr_png_data_uri(uri),
+    }
+
+
+@router.post("/users/me/mfa/confirm")
+def mfa_confirm(body: TotpConfirmIn, user=Depends(auth.require_auth)):
+    ok, msg = totpsvc.confirm_setup(user["id"], body.code)
+    if ok:
+        audit(user["username"], "mfa.enable", "")
+    return {"ok": ok, "message": msg}
+
+
+@router.post("/users/me/mfa/disable")
+def mfa_disable(body: TotpConfirmIn, user=Depends(auth.require_auth)):
+    # Zum Deaktivieren muss der aktuelle Code bestätigt werden
+    if totpsvc.is_enabled(user["id"]) and not totpsvc.verify(user["id"], body.code):
+        raise HTTPException(400, "Aktueller MFA-Code erforderlich")
+    totpsvc.disable(user["id"])
+    audit(user["username"], "mfa.disable", "")
+    return {"ok": True}

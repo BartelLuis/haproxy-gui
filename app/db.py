@@ -164,11 +164,20 @@ def get_db():
     conn = getattr(_local, "conn", None)
     if conn is None:
         os.makedirs(DATA_DIR, exist_ok=True)
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=15)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
         _local.conn = conn
+        _harden_db_file()
     return conn
+
+
+def _harden_db_file():
+    try:
+        os.chmod(DB_PATH, 0o600)
+    except OSError:
+        pass
 
 
 def q(sql, args=()):

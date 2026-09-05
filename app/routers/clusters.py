@@ -8,6 +8,7 @@ from .. import auth, db as dbmod
 from ..db import audit
 from ..services import deploy as deploysvc
 from ..services import runtime as runtimesvc
+from ..services import validate as v
 from ..services.configgen import generate_config
 
 router = APIRouter(prefix="/api", tags=["clusters"])
@@ -111,9 +112,28 @@ def delete_cluster(cid: int, user=Depends(auth.require_auth)):
     return {"ok": True}
 
 
+def _validate_node(body):
+    """Validiert Node-Felder gegen Command-/Config-Injection."""
+    try:
+        v.clean_name(body.name, "Node-Name")
+        v.clean_host(body.host, "Host")
+        v.clean_path(body.config_path, "config_path")
+        v.clean_path(body.cert_dir, "cert_dir")
+        if body.socket_path:
+            v.clean_path(body.socket_path, "socket_path")
+        if body.socket_host:
+            v.clean_host(body.socket_host, "socket_host")
+        # reload_cmd ist bewusst frei (Root-Befehl) -> nur Admin darf es setzen;
+        # hier nur Zeilenumbrüche verbieten
+        v.no_newline(body.reload_cmd, "reload_cmd")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.post("/nodes")
-def create_node(body: NodeIn, user=Depends(auth.require_auth)):
+def create_node(body: NodeIn, user=Depends(auth.require_role("admin"))):
     _get_cluster(body.cluster_id)
+    _validate_node(body)
     try:
         nid = dbmod.execute(
             "INSERT INTO nodes (cluster_id, name, host, ssh_port, ssh_user, ssh_key,"
@@ -122,7 +142,8 @@ def create_node(body: NodeIn, user=Depends(auth.require_auth)):
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 body.cluster_id, body.name, body.host, body.ssh_port, body.ssh_user,
-                body.ssh_key, body.ssh_password, int(body.is_local), body.config_path,
+                auth.encrypt_secret(body.ssh_key), auth.encrypt_secret(body.ssh_password),
+                int(body.is_local), body.config_path,
                 body.cert_dir, body.socket_type, body.socket_path, body.socket_host,
                 body.socket_port, body.reload_cmd,
             ),
@@ -134,10 +155,13 @@ def create_node(body: NodeIn, user=Depends(auth.require_auth)):
 
 
 @router.put("/nodes/{nid}")
-def update_node(nid: int, body: NodeIn, user=Depends(auth.require_auth)):
+def update_node(nid: int, body: NodeIn, user=Depends(auth.require_role("admin"))):
     node = _get_node(nid)
-    key = body.ssh_key if body.ssh_key else node["ssh_key"]
-    password = body.ssh_password if body.ssh_password else node["ssh_password"]
+    _validate_node(body)
+    key = auth.encrypt_secret(body.ssh_key) if body.ssh_key else node["ssh_key"]
+    password = (
+        auth.encrypt_secret(body.ssh_password) if body.ssh_password else node["ssh_password"]
+    )
     dbmod.execute(
         "UPDATE nodes SET cluster_id=?, name=?, host=?, ssh_port=?, ssh_user=?,"
         " ssh_key=?, ssh_password=?, is_local=?, config_path=?, cert_dir=?,"

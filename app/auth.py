@@ -11,10 +11,15 @@ from . import db
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
-TOKEN_TTL = 7 * 24 * 3600
+TOKEN_TTL = int(os.environ.get("TOKEN_TTL_HOURS", "12")) * 3600
 ROLE_LEVEL = {"viewer": 1, "operator": 2, "admin": 3}
 
 _secret = None
+_fernet = None
+_login_attempts = {}  # ip/username -> [fehlversuch-timestamps]
+LOGIN_WINDOW = 300    # 5 Minuten
+LOGIN_MAX = 5         # max. Fehlversuche pro Fenster
+LOGIN_LOCKOUT = 300   # Sperrdauer in Sekunden
 
 
 def _get_secret():
@@ -29,7 +34,56 @@ def _get_secret():
             _secret = os.urandom(32).hex().encode()
             with open(path, "wb") as f:
                 f.write(_secret)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
     return _secret
+
+
+def _get_fernet():
+    """Symmetrischer Schlüssel (aus secret.key) zum Verschlüsseln von Secrets in der DB."""
+    global _fernet
+    if _fernet is None:
+        import base64 as b64
+        from cryptography.fernet import Fernet
+        key = b64.urlsafe_b64encode(hashlib.sha256(_get_secret()).digest())
+        _fernet = Fernet(key)
+    return _fernet
+
+
+def encrypt_secret(plaintext):
+    if not plaintext:
+        return ""
+    return "enc:" + _get_fernet().encrypt(plaintext.encode()).decode()
+
+
+def decrypt_secret(value):
+    if not value:
+        return ""
+    if not value.startswith("enc:"):
+        return value  # Altbestand unverschlüsselt
+    try:
+        return _get_fernet().decrypt(value[4:].encode()).decode()
+    except Exception:
+        return ""
+
+
+def login_rate_check(key):
+    """True = erlaubt, False = gesperrt (zu viele Fehlversuche)."""
+    now = time.time()
+    attempts = [t for t in _login_attempts.get(key, []) if now - t < LOGIN_WINDOW]
+    _login_attempts[key] = attempts
+    return len(attempts) < LOGIN_MAX
+
+
+def login_failed(key):
+    now = time.time()
+    _login_attempts.setdefault(key, []).append(now)
+
+
+def login_succeeded(key):
+    _login_attempts.pop(key, None)
 
 
 def hash_password(password):
