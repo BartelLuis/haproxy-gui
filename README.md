@@ -9,8 +9,6 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 ![CI](https://github.com/BartelLuis/haproxy-gui/actions/workflows/ci.yml/badge.svg)
 ![GHCR](https://github.com/BartelLuis/haproxy-gui/actions/workflows/publish.yml/badge.svg)
 
-![Architektur](docs/architektur.png)
-
 ## Features
 
 - **Multi-Cluster:** Beliebig viele HAProxy-Cluster mit je mehreren Nodes
@@ -22,9 +20,15 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 - **Sicheres Deploy:** Upload → `haproxy -c` Validierung auf dem Node → Backup der alten
   Config → Aktivierung → Reload (systemd / `haproxy -sf` / Docker / SIGUSR2)
 - **Let's Encrypt via DNS-Validierung** über [lego](https://go-acme.github.io/lego/)
-  (u. a. Cloudflare, Route53, DigitalOcean, Hetzner, Azure, DuckDNS, deSEC, IONOS, netcup, OVH)
+  (u. a. Cloudflare, Route53, DigitalOcean, **Hetzner Cloud**, Azure, DuckDNS, deSEC, IONOS,
+  netcup, OVH, **Technitium DNS**, **manuelles DNS**)
   - Wildcard-Zertifikate möglich
+  - **Technitium DNS:** eigener DNS-Server via Webhook-Provider angebunden
+    (Server-URL + API-Token)
+  - **Manuelles DNS:** der TXT-Record wird in der GUI angezeigt, du legst ihn selbst
+    in deiner DNS-Zone an und bestätigst per Klick
   - Automatische Erneuerung (< 30 Tage Restlaufzeit) und Verteilung auf die Nodes
+    (bei manuellem DNS ohne Auto-Renew – dort erscheint die neue Challenge in der GUI)
 - **Live-Monitoring** über die HAProxy Runtime-API: Status aller Proxys/Server,
   Server zur Laufzeit aktivieren / drainen / in Wartung nehmen
 - **Auth & Benutzerverwaltung:** mehrere Benutzer mit Rollen

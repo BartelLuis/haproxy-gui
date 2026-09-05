@@ -30,8 +30,8 @@ PROVIDERS = {
         "env": [("DO_AUTH_TOKEN", "API-Token")],
     },
     "hetzner": {
-        "label": "Hetzner DNS",
-        "env": [("HETZNER_API_KEY", "API-Key")],
+        "label": "Hetzner Cloud",
+        "env": [("HETZNER_API_TOKEN", "API-Token (Cloud-Konsole → Security → API)")],
     },
     "azure": {
         "label": "Azure DNS",
@@ -71,6 +71,17 @@ PROVIDERS = {
             ("OVH_APPLICATION_SECRET", "Application Secret"),
             ("OVH_CONSUMER_KEY", "Consumer Key"),
         ],
+    },
+    "technitium": {
+        "label": "Technitium DNS",
+        "env": [
+            ("TECHNITIUM_SERVER", "Server-URL (z. B. http://192.168.1.10:5380)"),
+            ("TECHNITIUM_TOKEN", "API-Token (aus der Technitium-Web-GUI)"),
+        ],
+    },
+    "manual": {
+        "label": "Manuelles DNS (TXT selbst anlegen)",
+        "env": [],
     },
 }
 
@@ -144,32 +155,232 @@ def _set(cert_id, **fields):
     )
 
 
+# ---------------------------------------------------------------------------
+# Technitium DNS (via lego webhook-Provider)
+# ---------------------------------------------------------------------------
+
+TECHNITIUM_HOOK = r"""#!/bin/sh
+# lego webhook-Hook für Technitium DNS Server
+# Erwartet LEGO_VALIDATION_DOMAIN (FQDN) und LEGO_VALIDATION_VALUE (TXT-Wert)
+API="$TECHNITIUM_SERVER/api/dns"
+TOKEN="$TECHNITIUM_TOKEN"
+
+# Zonennamen aus FQDN ableiten: längste bekannte Zone finden,
+# Fallback: letzte beiden Labels (example.com)
+FQDN="${LEGO_VALIDATION_DOMAIN#.}"
+ZONE=$(printf '%s' "$FQDN" | awk -F. '{print $(NF-1)"."$NF}')
+RECORD=$(printf '%s' "$FQDN" | sed "s/\.$ZONE$//")
+
+if [ "$LEGO_MODE" = "present" ]; then
+  curl -sf "$API/zones/records/add?token=$TOKEN&zone=$ZONE&domain=$FQDN&type=TXT&ttl=60&text=$LEGO_VALIDATION_VALUE" || true
+else
+  curl -sf "$API/zones/records/delete?token=$TOKEN&zone=$ZONE&domain=$FQDN&type=TXT&text=$LEGO_VALIDATION_VALUE" || true
+fi
+sleep 10
+"""
+
+
+def _write_technitium_hook():
+    os.makedirs(ACME_DIR, exist_ok=True)
+    path = os.path.join(ACME_DIR, "technitium_hook.sh")
+    with open(path, "w", newline="\n") as f:
+        f.write(TECHNITIUM_HOOK)
+    try:
+        os.chmod(path, 0o755)
+    except OSError:
+        pass
+    return path
+
+
+def _technitium_env(cfg):
+    server = (cfg.get("TECHNITIUM_SERVER") or "").rstrip("/")
+    token = cfg.get("TECHNITIUM_TOKEN") or ""
+    if not server or not token:
+        raise ValueError("Technitium: TECHNITIUM_SERVER und TECHNITIUM_TOKEN erforderlich")
+    hook = _write_technitium_hook()
+    return {
+        "TECHNITIUM_SERVER": server,
+        "TECHNITIUM_TOKEN": token,
+        "EXEC_PATH": hook,
+        "EXEC_MODE": "",
+        "EXEC_PROPAGATION_TIMEOUT": "300",
+        "EXEC_POLLING_INTERVAL": "5",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Manuelles DNS (TXT-Record wird angezeigt, Benutzer legt ihn selbst an)
+# ---------------------------------------------------------------------------
+
+MANUAL_HOOK_PRESENT = r"""#!/bin/sh
+# Schreibt die benötigten TXT-Records in eine Datei und wartet auf Bestätigung.
+CONF_FILE="$LEGO_MANUAL_CONFIRM_FILE"
+RECORDS_FILE="$LEGO_MANUAL_RECORDS_FILE"
+printf '%s %s\n' "$LEGO_VALIDATION_DOMAIN" "$LEGO_VALIDATION_VALUE" >> "$RECORDS_FILE"
+# Warten, bis der Benutzer die Bestätigungsdatei angelegt hat (max 20 min)
+i=0
+while [ ! -f "$CONF_FILE" ] && [ $i -lt 1200 ]; do
+  sleep 1
+  i=$((i+1))
+done
+exit 0
+"""
+
+MANUAL_HOOK_CLEANUP = "#!/bin/sh\nexit 0\n"
+
+
+def _write_manual_hooks():
+    os.makedirs(ACME_DIR, exist_ok=True)
+    present = os.path.join(ACME_DIR, "manual_present.sh")
+    cleanup = os.path.join(ACME_DIR, "manual_cleanup.sh")
+    for path, content in ((present, MANUAL_HOOK_PRESENT), (cleanup, MANUAL_HOOK_CLEANUP)):
+        with open(path, "w", newline="\n") as f:
+            f.write(content)
+        try:
+            os.chmod(path, 0o755)
+        except OSError:
+            pass
+    return present, cleanup
+
+
+def _manual_paths(cert):
+    os.makedirs(ACME_DIR, exist_ok=True)
+    return (
+        os.path.join(ACME_DIR, f"manual_{cert['id']}.records"),
+        os.path.join(ACME_DIR, f"manual_{cert['id']}.confirm"),
+    )
+
+
+def get_pending_challenge(cert):
+    """Liest die aktuell zu setzenden TXT-Records einer laufenden manuellen Challenge."""
+    records_file, confirm_file = _manual_paths(cert)
+    if os.path.exists(confirm_file) or not os.path.exists(records_file):
+        return None
+    records = []
+    with open(records_file) as f:
+        for line in f:
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                records.append({"domain": parts[0].strip(), "value": parts[1].strip()})
+    return records or None
+
+
+def confirm_manual(cert_id):
+    cert = dbmod.one("SELECT * FROM certificates WHERE id = ?", (cert_id,))
+    if not cert or cert["dns_provider"] != "manual":
+        return False, "Kein manuelles Zertifikat"
+    _, confirm_file = _manual_paths(cert)
+    with open(confirm_file, "w") as f:
+        f.write("ok\n")
+    return True, "Bestätigt – Ausstellung läuft weiter"
+
+
+def _cleanup_manual(cert):
+    for p in _manual_paths(cert):
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def _issue_manual(cert, renew):
+    import time as _time
+
+    cert_id = cert["id"]
+    _cleanup_manual(cert)
+    _set(cert_id, status="waiting_dns", message="")
+    present, cleanup = _write_manual_hooks()
+    records_file, confirm_file = _manual_paths(cert)
+    open(records_file, "w").close()
+    domains = json.loads(cert["domains"])
+    crt, _ = cert_paths(cert)
+    cmd = [
+        "lego", "--accept-tos",
+        "--path", ACME_DIR,
+        "--email", cert["email"] or "admin@example.com",
+        "--dns", "manual",
+    ]
+    for d in domains:
+        cmd += ["--domains", d]
+    cmd.append("renew" if renew and os.path.exists(crt) else "run")
+    env = dict(os.environ)
+    env["LEGO_MANUAL_CONFIRM_FILE"] = confirm_file
+    env["LEGO_MANUAL_RECORDS_FILE"] = records_file
+    # lego manual ruft kein Skript auf – wir lesen die Challenge aus dem Log.
+    # Daher: --dns.exec-Modus mit unseren Hooks.
+    cmd = [c if c != "manual" else "exec" for c in cmd]
+    env["EXEC_PATH"] = present
+    env["EXEC_CLEANUP_PATH"] = cleanup
+    env["EXEC_MODE"] = ""
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=env,
+        )
+    except FileNotFoundError:
+        _set(cert_id, status="error", message="lego-Binary nicht gefunden")
+        _cleanup_manual(cert)
+        return
+    try:
+        proc.wait(timeout=1300)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        _set(cert_id, status="error",
+             message="Zeitüberschreitung – TXT-Record wurde nicht bestätigt")
+        _cleanup_manual(cert)
+        return
+    if proc.returncode != 0:
+        _set(cert_id, status="error", message="lego fehlgeschlagen (manuell)")
+        _cleanup_manual(cert)
+        return
+    not_after = ""
+    try:
+        with open(crt, "rb") as f:
+            x509cert = x509.load_pem_x509_certificate(f.read())
+        not_after = x509cert.not_valid_after_utc.isoformat()
+    except Exception:
+        pass
+    _cleanup_manual(cert)
+    _set(cert_id, status="active", message="", not_after=not_after)
+    deploy_cert(cert_id)
+
+
 def issue(cert_id, renew=False):
     """Ausstellung/Erneuerung via lego (blockierend – in Thread ausführen)."""
     cert = dbmod.one("SELECT * FROM certificates WHERE id = ?", (cert_id,))
     if not cert:
         return
-    _set(cert_id, status="issuing", message="")
+    provider = cert["dns_provider"]
     domains = json.loads(cert["domains"])
+
+    if provider == "manual":
+        _issue_manual(cert, renew)
+        return
+
+    _set(cert_id, status="issuing", message="")
+    cfg = json.loads(cert["provider_config"] or "{}")
     cmd = [
         "lego",
         "--accept-tos",
         "--path", ACME_DIR,
         "--email", cert["email"] or "admin@example.com",
-        "--dns", cert["dns_provider"],
     ]
+    env = dict(os.environ)
+    try:
+        if provider == "technitium":
+            cmd += ["--dns", "exec"]
+            env.update(_technitium_env(cfg))
+        else:
+            cmd += ["--dns", provider]
+            env.update({k: v for k, v in cfg.items() if v})
+    except ValueError as exc:
+        _set(cert_id, status="error", message=str(exc))
+        return
     for d in domains:
         cmd += ["--domains", d]
     crt, _ = cert_paths(cert)
     cmd.append("renew" if renew and os.path.exists(crt) else "run")
-    env = dict(os.environ)
-    env.update(
-        {
-            k: v
-            for k, v in json.loads(cert["provider_config"] or "{}").items()
-            if v
-        }
-    )
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=900, env=env
@@ -274,6 +485,7 @@ async def renewal_loop():
         try:
             certs = dbmod.q(
                 "SELECT * FROM certificates WHERE auto_renew = 1 AND status = 'active'"
+                " AND dns_provider != 'manual'"
             )
             for cert in certs:
                 try:

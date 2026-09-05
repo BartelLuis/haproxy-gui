@@ -58,7 +58,7 @@
     const s = String(status || "").toUpperCase();
     let cls = "muted";
     if (["UP", "OPEN", "ACTIVE", "READY", "ONLINE"].includes(s)) cls = "ok";
-    else if (["DRAIN", "NOLB", "ISSUING", "PENDING"].includes(s)) cls = "warn";
+    else if (["DRAIN", "NOLB", "ISSUING", "PENDING", "WAITING_DNS"].includes(s)) cls = "warn";
     else if (["DOWN", "MAINT", "ERROR", "OFFLINE"].includes(s)) cls = "err";
     return `<span class="badge ${cls}">${esc(status || "?")}</span>`;
   }
@@ -901,9 +901,10 @@
               <td>${statusBadge(c.status)}${c.message ? `<div class="error-text" style="font-size:11px">${esc(c.message.slice(0, 300))}</div>` : ""}</td>
               <td>${expiry}</td>
               <td class="c"><input type="checkbox" ${c.auto_renew ? "checked" : ""}
-                onchange="App.toggleAutoRenew(${c.id}, this.checked)"></td>
+                onchange="App.toggleAutoRenew(${c.id}, this.checked)" ${c.dns_provider === "manual" ? "disabled" : ""}></td>
               <td>
-                <button class="btn sm" onclick="App.renewCert(${c.id})">Erneuern</button>
+                ${c.status === "waiting_dns" ? `<button class="btn sm warn" onclick="App.showChallenge(${c.id})">TXT anzeigen</button>` : ""}
+                <button class="btn sm" onclick="App.renewCert(${c.id})" ${c.dns_provider === "manual" ? "disabled title='Manuelles DNS: neu ausstellen'" : ""}>Erneuern</button>
                 <button class="btn sm" onclick="App.deployCert(${c.id})">Verteilen</button>
                 <button class="btn sm danger" onclick="App.deleteCert(${c.id}, '${js(c.name)}')">Löschen</button>
               </td>
@@ -912,7 +913,7 @@
             .join("")}
         </tbody></table></div>`
         : '<div class="card muted">Noch keine Zertifikate angelegt.</div>');
-    if (state.certs.some((c) => c.status === "issuing")) {
+    if (state.certs.some((c) => c.status === "issuing" || c.status === "waiting_dns")) {
       setTimeout(() => {
         if ((location.hash || "").includes("certs")) router();
       }, 4000);
@@ -982,6 +983,57 @@
     } catch (e) {
       toast(e.message, "err");
     }
+  };
+
+  App.showChallenge = async function (id) {
+    const { close, form } = openModal("Manuelle DNS-Challenge", '<div class="loading">Lade…</div>', "TXT-Record ist gesetzt");
+    let timer = null;
+    const load = async () => {
+      try {
+        const res = await api(`/api/certificates/${id}/challenge`);
+        const body = $(".modal-body", form);
+        if (res.status === "active") {
+          body.innerHTML = '<div class="badge ok">Zertifikat wurde ausgestellt ✅</div>';
+          form.querySelector('button[type="submit"]').style.display = "none";
+          clearInterval(timer);
+          setTimeout(() => { close(); router(); }, 1500);
+          return;
+        }
+        if (res.status === "error") {
+          body.innerHTML = '<div class="badge err">Ausstellung fehlgeschlagen</div>';
+          form.querySelector('button[type="submit"]').style.display = "none";
+          clearInterval(timer);
+          return;
+        }
+        if (res.records && res.records.length) {
+          body.innerHTML = `
+            <p>Lege folgende <b>TXT-Records</b> in deiner DNS-Zone an und bestätige danach:</p>
+            <table class="data"><thead><tr><th>Name (FQDN)</th><th>Wert (TXT)</th></tr></thead>
+            <tbody>${res.records.map((r) => `
+              <tr><td style="font-family:monospace">${esc(r.domain)}</td>
+              <td style="font-family:monospace;user-select:all">${esc(r.value)}</td></tr>`).join("")}</tbody></table>
+            <p class="muted">Warte nach dem Anlegen ggf. 1–2 Minuten (DNS-Propagation), dann auf „TXT-Record ist gesetzt" klicken.</p>`;
+        } else {
+          body.innerHTML = '<div class="loading">Warte auf Challenge-Daten von Let\'s Encrypt… (lego startet)</div>';
+        }
+      } catch (e) {
+        $(".modal-body", form).innerHTML = `<div class="error-text">${esc(e.message)}</div>`;
+        clearInterval(timer);
+      }
+    };
+    await load();
+    timer = setInterval(load, 4000);
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api(`/api/certificates/${id}/confirm`, "POST");
+        toast("Bestätigt – Ausstellung läuft weiter");
+        await load();
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    };
+    $(".modal-overlay", form).addEventListener("mousedown", () => clearInterval(timer));
   };
 
   App.deployCert = async (id) => {

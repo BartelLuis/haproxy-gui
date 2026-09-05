@@ -103,3 +103,55 @@ def test_ldap_role_mapping(services):
     assert svc._role_from_groups(["cn=other,dc=x"], st) is None
     st2 = {"group_admin": "", "group_operator": "", "default_role": "operator"}
     assert svc._role_from_groups([], st2) == "operator"
+
+
+def test_providers_include_technitium_and_manual(env):
+    import importlib
+    import app.services.certs as certsvc
+    importlib.reload(certsvc)
+    providers = certsvc.providers_public()
+    assert "technitium" in providers
+    assert "manual" in providers
+    assert providers["technitium"]["env"][0][0] == "TECHNITIUM_SERVER"
+    assert providers["manual"]["env"] == []
+
+
+def test_technitium_env_validation(env):
+    import importlib
+    import app.services.certs as certsvc
+    importlib.reload(certsvc)
+    with pytest.raises(ValueError, match="TECHNITIUM"):
+        certsvc._technitium_env({})
+    env_map = certsvc._technitium_env(
+        {"TECHNITIUM_SERVER": "http://10.0.0.5:5380/", "TECHNITIUM_TOKEN": "abc"}
+    )
+    assert env_map["TECHNITIUM_SERVER"] == "http://10.0.0.5:5380"
+    assert env_map["TECHNITIUM_TOKEN"] == "abc"
+    assert env_map["EXEC_PATH"].endswith("technitium_hook.sh")
+    import os
+    assert os.path.exists(env_map["EXEC_PATH"])
+
+
+def test_manual_challenge_flow(env):
+    import importlib
+    import app.services.certs as certsvc
+    importlib.reload(certsvc)
+    db = env["db"]
+    cid = db.execute(
+        "INSERT INTO certificates (name, domains, dns_provider) VALUES (?, ?, ?)",
+        ("manual-test", '["example.com"]', "manual"),
+    )
+    cert = db.one("SELECT * FROM certificates WHERE id = ?", (cid,))
+    # Keine Challenge → None
+    assert certsvc.get_pending_challenge(cert) is None
+    # Records-Datei simulieren
+    records_file, confirm_file = certsvc._manual_paths(cert)
+    with open(records_file, "w") as f:
+        f.write("_acme-challenge.example.com TOKEN123\n")
+    pending = certsvc.get_pending_challenge(cert)
+    assert pending == [{"domain": "_acme-challenge.example.com", "value": "TOKEN123"}]
+    # Bestätigen
+    ok, msg = certsvc.confirm_manual(cid)
+    assert ok
+    assert certsvc.get_pending_challenge(cert) is None  # Confirm-Datei existiert → fertig
+    certsvc._cleanup_manual(cert)

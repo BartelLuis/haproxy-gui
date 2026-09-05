@@ -84,6 +84,26 @@ def set_auto_renew(cid: int, body: dict, user=Depends(auth.require_auth)):
     return {"ok": True}
 
 
+@router.get("/certificates/{cid}/challenge")
+def get_challenge(cid: int, user=Depends(auth.require_auth)):
+    """Liest die aktuell zu setzenden TXT-Records (manuelles DNS)."""
+    cert = dbmod.one("SELECT * FROM certificates WHERE id = ?", (cid,))
+    if not cert:
+        raise HTTPException(404, "Zertifikat nicht gefunden")
+    records = certsvc.get_pending_challenge(cert)
+    return {"status": cert["status"], "records": records}
+
+
+@router.post("/certificates/{cid}/confirm")
+def confirm_challenge(cid: int, user=Depends(auth.require_auth)):
+    """Bestätigt, dass der TXT-Record gesetzt ist (manuelles DNS)."""
+    ok, msg = certsvc.confirm_manual(cid)
+    if not ok:
+        raise HTTPException(400, msg)
+    audit(user["username"], "cert.manual_confirm", str(cid))
+    return {"ok": True, "message": msg}
+
+
 @router.delete("/certificates/{cid}")
 def delete_cert(cid: int, user=Depends(auth.require_auth)):
     cert = dbmod.one("SELECT * FROM certificates WHERE id = ?", (cid,))
