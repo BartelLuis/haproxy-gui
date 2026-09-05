@@ -1,0 +1,50 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coverage:
+    name: Test-Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt pytest-cov
+      - name: Tests mit Coverage
+        run: python -m pytest tests/ --cov=app --cov-report=xml --cov-report=term-missing
+      - name: Coverage-Report als Artefakt hochladen
+        uses: actions/upload-artifact@v5
+        with:
+          name: coverage-report
+          path: coverage.xml
+      - name: Gesamt-Coverage ausgeben
+        run: |
+          python -c "import xml.etree.ElementTree as ET; \
+          r = ET.parse('coverage.xml').getroot(); \
+          pct = float(r.get('line-rate')) * 100; \
+          print(f'Line-Coverage: {pct:.1f}%')"
+      - name: Coverage-Kommentar in PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const xml = fs.readFileSync('coverage.xml', 'utf8');
+            const m = xml.match(/line-rate="([0-9.]+)"/);
+            const pct = m ? (parseFloat(m[1]) * 100).toFixed(1) : '?';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `📊 **Test-Coverage:** ${pct}% (siehe Artefakt \`coverage-report\`)`
+            });

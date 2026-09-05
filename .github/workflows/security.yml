@@ -1,0 +1,59 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"   # wöchentlich montags
+
+permissions:
+  contents: read
+  security-events: write   # für CodeQL/Trivy-SARIF-Upload
+
+jobs:
+  bandit:
+    name: Bandit (Python SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Bandit installieren & laufen lassen
+        run: |
+          pip install bandit
+          bandit -r app -ll --exit-zero
+          bandit -r app -lll   # nur High-Severity lässt den Job fehlschlagen
+
+  pip-audit:
+    name: pip-audit (Python-Abhängigkeiten)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: pip-audit laufen lassen
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --progress-spinner off || true
+
+  trivy:
+    name: Trivy (Container-Image-Scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Image bauen
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: haproxy-gui:scan
+      - name: Trivy-Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: haproxy-gui:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"

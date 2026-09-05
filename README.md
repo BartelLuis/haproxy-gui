@@ -8,6 +8,12 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 
 ![CI](https://github.com/BartelLuis/haproxy-gui/actions/workflows/ci.yml/badge.svg)
 ![GHCR](https://github.com/BartelLuis/haproxy-gui/actions/workflows/publish.yml/badge.svg)
+![Security](https://github.com/BartelLuis/haproxy-gui/actions/workflows/security.yml/badge.svg)
+![Lint](https://github.com/BartelLuis/haproxy-gui/actions/workflows/lint.yml/badge.svg)
+![CodeQL](https://github.com/BartelLuis/haproxy-gui/actions/workflows/codeql.yml/badge.svg)
+![Coverage](https://github.com/BartelLuis/haproxy-gui/actions/workflows/coverage.yml/badge.svg)
+![Release](https://img.shields.io/github/v/release/BartelLuis/haproxy-gui)
+![License](https://img.shields.io/github/license/BartelLuis/haproxy-gui)
 
 > 📖 **Dokumentation:** Ausführliche Anleitungen findest du im **[Wiki](wiki/Home.md)** –
 > [Installation](wiki/Installation.md) · [Quickstart](wiki/Getting-Started.md) ·
