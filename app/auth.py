@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import hmac
 import os
@@ -74,7 +75,10 @@ def create_token(user):
 
 def verify_token(token):
     try:
-        raw = base64.urlsafe_b64decode(token.encode()).decode()
+        normalized = token + ("=" * (-len(token) % 4))
+        raw = base64.b64decode(
+            normalized.encode(), altchars=b"-_", validate=True
+        ).decode()
         uid, username, role, exp, sig = raw.rsplit(":", 4)
         if time.time() > int(exp):
             return None
@@ -86,7 +90,7 @@ def verify_token(token):
         if not hmac.compare_digest(sig, expected):
             return None
         return {"id": int(uid), "username": username, "role": role}
-    except Exception:
+    except (ValueError, UnicodeDecodeError, binascii.Error):
         return None
 
 
