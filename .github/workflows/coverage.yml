@@ -23,7 +23,7 @@ jobs:
       - name: Tests mit Coverage
         run: python -m pytest tests/ --cov=app --cov-report=xml --cov-report=term-missing
       - name: Coverage-Report als Artefakt hochladen
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage.xml
