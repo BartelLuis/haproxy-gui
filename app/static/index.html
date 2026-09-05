@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HAProxy GUI</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="login-view" class="login-wrap hidden">
+    <form id="login-form" class="login-card">
+      <h1>HAProxy <span>GUI</span></h1>
+      <p class="muted">Multi-Cluster Verwaltung</p>
+      <input id="login-user" placeholder="Benutzername" autocomplete="username" required>
+      <input id="login-pass" type="password" placeholder="Passwort" autocomplete="current-password" required>
+      <button type="submit" class="btn primary block">Anmelden</button>
+      <div id="login-error" class="error-text"></div>
+    </form>
+  </div>
+
+  <div id="app" class="layout hidden">
+    <aside class="sidebar">
+      <div class="brand">HAProxy <span>GUI</span></div>
+      <nav>
+        <a href="#/dashboard" data-route="dashboard">Dashboard</a>
+        <a href="#/clusters" data-route="clusters">Cluster &amp; Nodes</a>
+        <a href="#/frontends" data-route="frontends">Frontends</a>
+        <a href="#/backends" data-route="backends">Backends</a>
+        <a href="#/certs" data-route="certs">Zertifikate</a>
+        <a href="#/deploy" data-route="deploy">Config &amp; Deploy</a>
+        <a href="#/versions" data-route="versions">Versionen</a>
+        <a href="#/runtime" data-route="runtime">Runtime</a>
+        <a href="#/logs" data-route="logs">Logs</a>
+        <a href="#/keepalived" data-route="keepalived">Keepalived</a>
+        <a href="#/tools" data-route="tools">Tools</a>
+        <a href="#/alerts" data-route="alerts" data-admin="1">Alerts</a>
+        <a href="#/users" data-route="users" data-admin="1">Benutzer</a>
+      </nav>
+      <div id="user-info" class="muted" style="margin-bottom:10px;font-size:12px"></div>
+      <button id="logout-btn" class="btn ghost">Abmelden</button>
+    </aside>
+    <main id="content"></main>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

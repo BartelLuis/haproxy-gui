@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+paramiko>=3.4
+cryptography>=42
+ldap3>=2.9
+pytest>=8
+requests>=2.31

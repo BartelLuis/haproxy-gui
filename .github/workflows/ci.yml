@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python-Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt
+
+      - name: Compile-Check
+        run: python -m compileall -q app
+
+      - name: pytest
+        run: python -m pytest tests/ -v --tb=short
+        env:
+          PYTHONUNBUFFERED: "1"
+
+  docker:
+    name: Docker-Image bauen & Smoke-Test
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker Buildx einrichten
+        uses: docker/setup-buildx-action@v3
+
+      - name: Image bauen (mit Cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: haproxy-gui:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Container starten
+        run: |
+          docker run -d --name hg \
+            -p 18080:8080 \
+            -e ADMIN_PASSWORD=ci-test-password \
+            -e ENABLE_LOCAL_HAPROXY=true \
+            haproxy-gui:test
+          echo "Warte auf Server..."
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:18080/ > /dev/null; then
+              echo "Server bereit"; break
+            fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:18080/ | grep -q HAProxy
+          echo "GUI erreichbar"
+
+      - name: Container-Smoke-Test (Login, API, Local-Cluster, HAProxy läuft)
+        run: |
+          set -e
+          TOKEN=$(curl -sf -X POST http://127.0.0.1:18080/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"ci-test-password"}' | \
+            python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+          echo "Login OK"
+          curl -sf -H "Authorization: Bearer $TOKEN" \
+            http://127.0.0.1:18080/api/clusters | grep -q '"Local"'
+          echo "Local-Cluster vorhanden"
+          # eingebetteter HAProxy muss laufen und per Runtime-API antworten
+          INFO=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" \
+            http://127.0.0.1:18080/api/nodes/1/test)
+          echo "$INFO"
+          echo "$INFO" | grep -q '"ok":true'
+          echo "HAProxy-Node online – Container-Smoke-Test bestanden"
+
+      - name: Container-Logs bei Fehler
+        if: failure()
+        run: docker logs hg || true
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f hg || true

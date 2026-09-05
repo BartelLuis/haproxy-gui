@@ -1,0 +1,19 @@
+services:
+  haproxy-gui:
+    build: .
+    container_name: haproxy-gui
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # Web-GUI
+      - "80:80"       # optional: eingebetteter HAProxy
+      - "443:443"     # optional: eingebetteter HAProxy
+    environment:
+      ADMIN_USER: admin
+      ADMIN_PASSWORD: change-me        # unbedingt ändern!
+      ENABLE_LOCAL_HAPROXY: "true"     # eingebetteten HAProxy-Cluster "Local" aktivieren
+      # GUI_PORT: "8080"
+    volumes:
+      - haproxy-gui-data:/data
+
+volumes:
+  haproxy-gui-data:
