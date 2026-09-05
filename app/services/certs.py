@@ -115,7 +115,7 @@ def cert_paths(cert):
 
 
 def pem_bytes(cert):
-    """Kombiniertes PEM (Leaf + Intermediate + Key), wie HAProxy es erwartet."""
+    """Zertifikatsbundle ohne Key: Leaf + Intermediate/Chain, wie HAProxy für crt erwartet."""
     cert_dir = os.path.join(ACME_DIR, "certificates")
     base = _base(cert)
     name = (cert.get("name") or "").strip()
@@ -141,19 +141,7 @@ def pem_bytes(cert):
             data = f.read()
         if b"BEGIN CERTIFICATE" in data:
             cert_files.append(path)
-
-    key_path = None
-    for suffix in (".key", ".private.key"):
-        for prefix in [base, name, name.rsplit(".pem", 1)[0] if name.endswith(".pem") else name]:
-            if not prefix:
-                continue
-            path = os.path.join(cert_dir, prefix + suffix)
-            if os.path.exists(path):
-                key_path = path
-                break
-        if key_path:
-            break
-    if not cert_files or not key_path:
+    if not cert_files:
         return None
 
     bundle = []
@@ -162,15 +150,29 @@ def pem_bytes(cert):
             data = f.read().strip()
         if data:
             bundle.append(data + b"\n")
-    with open(key_path, "rb") as f:
-        key = f.read().strip()
-    if key:
-        bundle.append(key + b"\n")
     return b"".join(bundle)
 
 
+def key_bytes(cert):
+    """Privater Schlüssel für das Zertifikat; separat auf dem Zielhost installieren."""
+    cert_dir = os.path.join(ACME_DIR, "certificates")
+    base = _base(cert)
+    name = (cert.get("name") or "").strip()
+    for prefix in [base, name, name.rsplit(".pem", 1)[0] if name.endswith(".pem") else name]:
+        if not prefix:
+            continue
+        for suffix in (".key", ".private.key"):
+            path = os.path.join(cert_dir, prefix + suffix)
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    data = f.read().strip()
+                if data:
+                    return data + b"\n"
+    return None
+
+
 def cluster_cert_files(cluster_id):
-    """Alle Zertifikate, die von SSL-Frontends des Clusters referenziert werden."""
+    """Alle Zertifikate und Keys, die von SSL-Frontends des Clusters referenziert werden."""
     rows = dbmod.q(
         "SELECT DISTINCT c.* FROM certificates c"
         " JOIN frontends f ON f.cert_id = c.id"
@@ -179,9 +181,11 @@ def cluster_cert_files(cluster_id):
     )
     files, warnings = {}, []
     for cert in rows:
-        pem = pem_bytes(cert)
-        if pem:
-            files[cert["name"] + ".pem"] = pem
+        crt = pem_bytes(cert)
+        k = key_bytes(cert)
+        if crt and k:
+            files[cert["name"] + ".crt"] = crt
+            files[cert["name"] + ".key"] = k
         else:
             warnings.append(
                 f"Zertifikat '{cert['name']}' ist noch nicht ausgestellt"
@@ -467,7 +471,8 @@ def deploy_cert(cert_id):
     if not cert:
         return []
     pem = pem_bytes(cert)
-    if not pem:
+    key = key_bytes(cert)
+    if not pem or not key:
         return [
             {
                 "node": "-",
@@ -476,7 +481,9 @@ def deploy_cert(cert_id):
                 "log": [],
             }
         ]
-    fname = cert["name"] + ".pem"
+    cert_name = cert["name"]
+    cert_file = cert_name + ".crt"
+    key_file = cert_name + ".key"
     clusters = dbmod.q(
         "SELECT DISTINCT cl.* FROM clusters cl"
         " JOIN frontends f ON f.cluster_id = cl.id"
@@ -499,21 +506,28 @@ def deploy_cert(cert_id):
         ):
             log = []
             try:
-                target = node["cert_dir"].rstrip("/") + "/" + fname
+                cert_target = node["cert_dir"].rstrip("/") + "/" + cert_file
+                key_target = node["cert_dir"].rstrip("/") + "/" + key_file
                 if node.get("is_local"):
                     os.makedirs(node["cert_dir"], exist_ok=True)
-                    try:
-                        os.remove(target)
-                    except FileNotFoundError:
-                        pass
-                    with open(target, "wb") as f:
+                    for target in (cert_target, key_target):
+                        try:
+                            os.remove(target)
+                        except FileNotFoundError:
+                            pass
+                    with open(cert_target, "wb") as f:
                         f.write(pem)
-                    os.chmod(target, 0o600)
+                    with open(key_target, "wb") as f:
+                        f.write(key)
+                    os.chmod(cert_target, 0o600)
+                    os.chmod(key_target, 0o600)
                 else:
                     sshclient.run_ssh(node, f"mkdir -p {node['cert_dir']}")
-                    sshclient.run_ssh(node, f"rm -f {shlex.quote(target)}")
-                    sshclient.sftp_write(node, target, pem, mode=0o600)
-                log.append(f"Zertifikat nach {target} geschrieben")
+                    for target in (cert_target, key_target):
+                        sshclient.run_ssh(node, f"rm -f {shlex.quote(target)}")
+                    sshclient.sftp_write(node, cert_target, pem, mode=0o600)
+                    sshclient.sftp_write(node, key_target, key, mode=0o600)
+                log.append(f"Zertifikat nach {cert_target} und Schlüssel nach {key_target} geschrieben")
                 ok, msg = deploysvc.reload_node(node)
                 log.append(msg)
                 results.append(

@@ -75,7 +75,11 @@ def generate_config(cluster, node=None):
                 raise ValueError(
                     f"Frontend '{fe['name']}': kein Zertifikat zugeordnet"
                 )
-            bind += f" ssl crt {cert_dir}/{cert['name']}.pem alpn h2,http1.1"
+            bind += (
+                f" ssl crt {cert_dir}/{cert['name']}.crt"
+                f" ssl-key-file {cert_dir}/{cert['name']}.key"
+                " alpn h2,http1.1"
+            )
         lines.append(bind)
         lines.append(f"    mode {fe['mode']}")
         if fe["ssl_redirect"] and fe["use_ssl"] and fe["mode"] == "http":

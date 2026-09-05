@@ -210,10 +210,11 @@ def test_pem_bytes_includes_issuer_chain(env):
     with open(key, "wb") as f:
         f.write(b"-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n")
     bundle = certsvc.pem_bytes(cert)
+    key = certsvc.key_bytes(cert)
     assert b"LEAF" in bundle
     assert b"INTERMEDIATE" in bundle
-    assert b"KEY" in bundle
-    assert bundle.index(b"LEAF") < bundle.index(b"INTERMEDIATE") < bundle.index(b"KEY")
+    assert b"KEY" in key
+    assert bundle.index(b"LEAF") < bundle.index(b"INTERMEDIATE")
 
 
 def test_manual_challenge_flow(env):
