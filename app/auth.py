@@ -75,7 +75,10 @@ def create_token(user):
 
 def verify_token(token):
     try:
-        raw = base64.b64decode(token.encode(), altchars=b"-_", validate=True).decode()
+        normalized = token + ("=" * (-len(token) % 4))
+        raw = base64.b64decode(
+            normalized.encode(), altchars=b"-_", validate=True
+        ).decode()
         uid, username, role, exp, sig = raw.rsplit(":", 4)
         if time.time() > int(exp):
             return None

@@ -7,6 +7,7 @@ def test_admin_login_and_token(env):
     assert user and user["role"] == "admin"
     token = auth.create_token(user)
     assert auth.verify_token(token)["username"] == "admin"
+    assert auth.verify_token(token.rstrip("="))["username"] == "admin"
     assert auth.verify_token(token + "x") is None
     assert auth.check_credentials("admin", "falsch") is None
 
