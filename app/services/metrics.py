@@ -1,4 +1,3 @@
-import os
 import re
 import shutil
 import time
@@ -28,7 +27,7 @@ def _cpu_percent(line1, line2):
 def _parse_output(text):
     result = {"cpu_percent": None, "load": "", "mem": {}, "disk": {}}
     lines = text.splitlines()
-    cpu_lines = [l for l in lines if l.startswith("cpu ")]
+    cpu_lines = [cpu_line for cpu_line in lines if cpu_line.startswith("cpu ")]
     if len(cpu_lines) >= 2:
         result["cpu_percent"] = _cpu_percent(cpu_lines[0], cpu_lines[1])
     mem = {}

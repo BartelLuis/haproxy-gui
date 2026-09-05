@@ -73,7 +73,7 @@ def deploy_node(cluster, node, validate_only=False, content=None,
         # Eingaben validieren (Command-Injection-Schutz)
         path = v.clean_path(node["config_path"], "config_path")
         cert_dir = v.clean_path(node["cert_dir"], "cert_dir")
-        node_name = v.clean_name(node["name"], "Node-Name")
+        v.clean_name(node["name"], "Node-Name")
 
         if content is not None:
             cfg = content
