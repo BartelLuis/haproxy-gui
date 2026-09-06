@@ -3,6 +3,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import tempfile
 
 from .. import db as dbmod
 from . import alerting, certs as certsvc
@@ -16,30 +17,59 @@ MASTER_PID = "/run/haproxy/master.pid"
 def _group_cert_files(cert_files):
     grouped = {}
     for name, data in cert_files.items():
-        base = v.clean_name(os.path.splitext(name)[0])
-        grouped.setdefault(base, {})["crt" if name.endswith(".crt") else "key"] = data
+        base, suffix = os.path.splitext(name)
+        base = v.clean_name(base)
+        if suffix not in (".crt", ".key") or not isinstance(data, bytes) or not data.strip():
+            raise ValueError(f"Ungültige oder leere Zertifikatsdatei: {name}")
+        grouped.setdefault(base, {})[suffix[1:]] = data
+    for base, payloads in grouped.items():
+        if "crt" not in payloads or "key" not in payloads:
+            raise ValueError(f"Zertifikat oder privater Schlüssel fehlt: {base}")
     return grouped
 
 
 def _write_cert_files(cert_dir, cert_files):
+    grouped = _group_cert_files(cert_files)
     os.makedirs(cert_dir, exist_ok=True)
-    for base, payloads in _group_cert_files(cert_files).items():
-        for stale in (base + ".pem", base + ".crt", base + ".key"):
-            target = os.path.join(cert_dir, stale)
+    for base, payloads in grouped.items():
+        for suffix, data in payloads.items():
+            target = os.path.join(cert_dir, base + "." + suffix)
+            temp_path = None
             try:
-                os.remove(target)
-            except FileNotFoundError:
-                pass
-        if payloads.get("crt") is not None:
-            cert_target = os.path.join(cert_dir, base + ".crt")
-            with open(cert_target, "wb") as f:
-                f.write(payloads["crt"])
-            os.chmod(cert_target, 0o600)
-        if payloads.get("key") is not None:
-            key_target = os.path.join(cert_dir, base + ".key")
-            with open(key_target, "wb") as f:
-                f.write(payloads["key"])
-            os.chmod(key_target, 0o600)
+                with tempfile.NamedTemporaryFile(dir=cert_dir, prefix=".cert-", delete=False) as f:
+                    temp_path = f.name
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.chmod(temp_path, 0o600)
+                os.replace(temp_path, target)
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    os.remove(temp_path)
+        try:
+            os.remove(os.path.join(cert_dir, base + ".pem"))
+        except FileNotFoundError:
+            pass
+    return len(cert_files)
+
+
+def install_cert_files(node, cert_files):
+    """Installiert nur vollständige Zertifikat/Key-Paare ohne vorheriges Löschen."""
+    if node.get("is_local"):
+        return _write_cert_files(node["cert_dir"], cert_files)
+    cert_dir = v.clean_path(node["cert_dir"], "cert_dir")
+    grouped = _group_cert_files(cert_files)
+    rc, out, err = sshclient.run_ssh(node, f"mkdir -p {shlex.quote(cert_dir)}")
+    if rc != 0:
+        raise RuntimeError("Zertifikats-Verzeichnis konnte nicht angelegt werden: " + (err or out).strip())
+    for base, payloads in grouped.items():
+        for suffix, data in payloads.items():
+            target = f"{cert_dir.rstrip('/')}/{base}.{suffix}"
+            sshclient.sftp_write(node, target, data, mode=0o600)
+        legacy = f"{cert_dir.rstrip('/')}/{base}.pem"
+        rc, out, err = sshclient.run_ssh(node, f"rm -f {shlex.quote(legacy)}")
+        if rc != 0:
+            raise RuntimeError("Alte PEM-Datei konnte nicht entfernt werden: " + (err or out).strip())
     return len(cert_files)
 
 
@@ -102,7 +132,7 @@ def deploy_node(cluster, node, validate_only=False, content=None,
     try:
         # Eingaben validieren (Command-Injection-Schutz)
         path = v.clean_path(node["config_path"], "config_path")
-        cert_dir = v.clean_path(node["cert_dir"], "cert_dir")
+        v.clean_path(node["cert_dir"], "cert_dir")
         v.clean_name(node["name"], "Node-Name")
 
         if content is not None:
@@ -115,11 +145,12 @@ def deploy_node(cluster, node, validate_only=False, content=None,
         for w in warnings:
             log.append("WARNUNG: " + w)
         new_path = path + ".new"
-        q_new, q_path, q_cert = shlex.quote(new_path), shlex.quote(path), shlex.quote(cert_dir)
+        q_new, q_path = shlex.quote(new_path), shlex.quote(path)
+
+        install_cert_files(node, cert_files)
+        log.append(f"{len(cert_files)} Zertifikatsdatei(en) übertragen und geprüft")
 
         if node.get("is_local"):
-            _write_cert_files(cert_dir, cert_files)
-            log.append(f"{len(cert_files)} Zertifikat(e) aktualisiert")
             with open(new_path, "w") as f:
                 f.write(cfg)
             rc, out, err = _local(["haproxy", "-c", "-f", new_path])
@@ -140,18 +171,6 @@ def deploy_node(cluster, node, validate_only=False, content=None,
             if not success:
                 return fail("Reload fehlgeschlagen: " + msg)
         else:
-            rc, out, err = sshclient.run_ssh(node, f"mkdir -p {q_cert}")
-            if rc != 0:
-                return fail("SSH-Verbindung fehlgeschlagen: " + (err.strip() or out.strip()))
-            for base, payloads in _group_cert_files(cert_files).items():
-                for stale in (base + ".pem", base + ".crt", base + ".key"):
-                    target = f"{cert_dir.rstrip('/')}/{stale}"
-                    sshclient.run_ssh(node, f"rm -f {shlex.quote(target)}")
-                if payloads.get("crt") is not None:
-                    sshclient.sftp_write(node, f"{cert_dir.rstrip('/')}/{base}.crt", payloads["crt"], mode=0o600)
-                if payloads.get("key") is not None:
-                    sshclient.sftp_write(node, f"{cert_dir.rstrip('/')}/{base}.key", payloads["key"], mode=0o600)
-            log.append(f"{len(cert_files)} Zertifikat(e) hochgeladen")
             sshclient.sftp_write(node, new_path, cfg.encode())
             log.append(f"Konfiguration nach {new_path} hochgeladen")
             rc, out, err = sshclient.run_ssh(node, f"haproxy -c -f {q_new}")

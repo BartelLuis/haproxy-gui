@@ -218,7 +218,6 @@ def test_pem_bytes_includes_issuer_chain(env):
 
 
 def test_write_cert_files_removes_stale_pem_and_writes_split_files(tmp_path):
-    import os
     import app.services.deploy as deploysvc
 
     cert_dir = tmp_path / "certs"

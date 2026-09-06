@@ -45,6 +45,8 @@ def generate_config(cluster, node=None):
         lines.append(f"    stats socket {sock} mode 660 level admin")
     lines.append("    stats timeout 30s")
     lines.append("    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets")
+    # Zu NAME.crt den separat installierten Schlüssel NAME.key laden.
+    lines.append("    ssl-load-extra-del-ext")
     if cluster.get("global_extra"):
         lines.append(_indent_block(cluster["global_extra"]))
     lines.append("")
@@ -77,7 +79,6 @@ def generate_config(cluster, node=None):
                 )
             bind += (
                 f" ssl crt {cert_dir}/{cert['name']}.crt"
-                f" ssl-key-file {cert_dir}/{cert['name']}.key"
                 " alpn h2,http1.1"
             )
         lines.append(bind)

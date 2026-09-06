@@ -2,7 +2,6 @@ import asyncio
 import glob
 import json
 import os
-import shlex
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -463,9 +462,8 @@ def issue(cert_id, renew=False):
 
 
 def deploy_cert(cert_id):
-    """Schreibt das PEM auf alle Nodes der Cluster, die das Zertifikat nutzen."""
+    """Verteilt Zertifikat und Schlüssel auf alle Nodes der zugehörigen Cluster."""
     from . import deploy as deploysvc
-    from . import sshclient
 
     cert = dbmod.one("SELECT * FROM certificates WHERE id = ?", (cert_id,))
     if not cert:
@@ -508,26 +506,11 @@ def deploy_cert(cert_id):
             try:
                 cert_target = node["cert_dir"].rstrip("/") + "/" + cert_file
                 key_target = node["cert_dir"].rstrip("/") + "/" + key_file
-                if node.get("is_local"):
-                    os.makedirs(node["cert_dir"], exist_ok=True)
-                    for target in (cert_target, key_target):
-                        try:
-                            os.remove(target)
-                        except FileNotFoundError:
-                            pass
-                    with open(cert_target, "wb") as f:
-                        f.write(pem)
-                    with open(key_target, "wb") as f:
-                        f.write(key)
-                    os.chmod(cert_target, 0o600)
-                    os.chmod(key_target, 0o600)
-                else:
-                    sshclient.run_ssh(node, f"mkdir -p {node['cert_dir']}")
-                    for target in (cert_target, key_target):
-                        sshclient.run_ssh(node, f"rm -f {shlex.quote(target)}")
-                    sshclient.sftp_write(node, cert_target, pem, mode=0o600)
-                    sshclient.sftp_write(node, key_target, key, mode=0o600)
-                log.append(f"Zertifikat nach {cert_target} und Schlüssel nach {key_target} geschrieben")
+                deploysvc.install_cert_files(node, {cert_file: pem, key_file: key})
+                log.append(
+                    f"Zertifikat nach {cert_target} ({len(pem)} Bytes) und Schlüssel nach "
+                    f"{key_target} ({len(key)} Bytes) übertragen und geprüft"
+                )
                 ok, msg = deploysvc.reload_node(node)
                 log.append(msg)
                 results.append(

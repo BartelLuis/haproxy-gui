@@ -1079,12 +1079,27 @@
   };
 
   App.deployCert = async (id) => {
+    const { form } = openModal(
+      "Zertifikat verteilen",
+      '<div class="loading">Zertifikat und Schlüssel werden auf die Nodes übertragen und geprüft…</div>'
+    );
+    $('button[type="submit"]', form).style.display = "none";
+    $('[data-close]', form).textContent = "Schließen";
+    form.onsubmit = (e) => e.preventDefault();
+    const box = $(".modal-body", form);
     try {
       const res = await api(`/api/certificates/${id}/deploy`, "POST");
+      box.innerHTML = res.results.map((r) => `
+        <div class="deploy-node">
+          <b>${esc(r.node)}</b> ${statusBadge(r.ok ? "OK" : "FEHLER")}
+          ${r.error ? `<div class="error-text">${esc(r.error)}</div>` : ""}
+          <pre>${esc((r.log || []).join("\n"))}</pre>
+        </div>`).join("") || '<p>Keine Nodes für dieses Zertifikat gefunden.</p>';
       const failed = res.results.filter((r) => !r.ok);
       if (failed.length) toast("Fehler bei: " + failed.map((r) => r.node).join(", "), "err");
       else toast("Zertifikat verteilt" + (res.results.length ? ` (${res.results.length} Node-Aktionen)` : ""));
     } catch (e) {
+      box.innerHTML = `<div class="error-text">${esc(e.message)}</div>`;
       toast(e.message, "err");
     }
   };

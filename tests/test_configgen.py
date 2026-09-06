@@ -78,13 +78,31 @@ def test_ssl_frontend_requires_cert(env, cluster):
         configgen.generate_config(cluster["cluster"], cluster["node"])
 
 
+def test_ssl_frontend_uses_separate_certificate_and_key(env, cluster):
+    db = env["db"]
+    cert_id = db.execute(
+        "INSERT INTO certificates (name, domains, dns_provider) VALUES (?, ?, ?)",
+        ("example.com", '["example.com"]', "manual"),
+    )
+    db.execute(
+        "INSERT INTO frontends (cluster_id, name, port, use_ssl, cert_id)"
+        " VALUES (?, 'https', 443, 1, ?)",
+        (cluster["cluster"]["id"], cert_id),
+    )
+    node = dict(cluster["node"], cert_dir="/etc/haproxy/certs")
+    cfg = configgen.generate_config(cluster["cluster"], node)
+    assert "ssl-load-extra-del-ext" in cfg.split("defaults\n", 1)[0]
+    assert "bind *:443 ssl crt /etc/haproxy/certs/example.com.crt alpn h2,http1.1" in cfg
+    assert "ssl-key-file" not in cfg
+
+
 def test_generate_route_rules(env, cluster):
     db = env["db"]
     be_app = db.execute(
         "INSERT INTO backends (cluster_id, name, mode, balance) VALUES (?, 'app', 'http', 'roundrobin')",
         (cluster["cluster"]["id"],),
     )
-    be_admin = db.execute(
+    db.execute(
         "INSERT INTO backends (cluster_id, name, mode, balance) VALUES (?, 'admin', 'http', 'roundrobin')",
         (cluster["cluster"]["id"],),
     )
