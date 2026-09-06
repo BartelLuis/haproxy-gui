@@ -53,19 +53,25 @@ def _write_cert_files(cert_dir, cert_files):
     return len(cert_files)
 
 
-def install_cert_files(node, cert_files):
+def install_cert_files(node, cert_files, log=None):
     """Installiert nur vollständige Zertifikat/Key-Paare ohne vorheriges Löschen."""
     if node.get("is_local"):
         return _write_cert_files(node["cert_dir"], cert_files)
     cert_dir = v.clean_path(node["cert_dir"], "cert_dir")
     grouped = _group_cert_files(cert_files)
+    if log is not None:
+        log.append(f"Zertifikatsverzeichnis {cert_dir} vorbereiten")
     rc, out, err = sshclient.run_ssh(node, f"mkdir -p {shlex.quote(cert_dir)}")
     if rc != 0:
         raise RuntimeError("Zertifikats-Verzeichnis konnte nicht angelegt werden: " + (err or out).strip())
     for base, payloads in grouped.items():
         for suffix, data in payloads.items():
             target = f"{cert_dir.rstrip('/')}/{base}.{suffix}"
-            sshclient.sftp_write(node, target, data, mode=0o600)
+            if log is not None:
+                log.append(f"Übertrage {target} ({len(data)} Bytes) über SSH")
+            sshclient.ssh_write(node, target, data, mode=0o600)
+            if log is not None:
+                log.append(f"{target}: Inhalt geprüft und Datei aktiviert")
         legacy = f"{cert_dir.rstrip('/')}/{base}.pem"
         rc, out, err = sshclient.run_ssh(node, f"rm -f {shlex.quote(legacy)}")
         if rc != 0:
@@ -147,7 +153,7 @@ def deploy_node(cluster, node, validate_only=False, content=None,
         new_path = path + ".new"
         q_new, q_path = shlex.quote(new_path), shlex.quote(path)
 
-        install_cert_files(node, cert_files)
+        install_cert_files(node, cert_files, log=log)
         log.append(f"{len(cert_files)} Zertifikatsdatei(en) übertragen und geprüft")
 
         if node.get("is_local"):
@@ -171,7 +177,7 @@ def deploy_node(cluster, node, validate_only=False, content=None,
             if not success:
                 return fail("Reload fehlgeschlagen: " + msg)
         else:
-            sshclient.sftp_write(node, new_path, cfg.encode())
+            sshclient.ssh_write(node, new_path, cfg.encode())
             log.append(f"Konfiguration nach {new_path} hochgeladen")
             rc, out, err = sshclient.run_ssh(node, f"haproxy -c -f {q_new}")
             if (out + err).strip():

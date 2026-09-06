@@ -44,15 +44,19 @@ def remote_certificate(env, cluster, monkeypatch):
         events.append(("run", command))
         return 0, "", ""
 
-    def sftp_write(node, target, data, mode=None):
+    def ssh_write(node, target, data, mode=None):
         events.append(("write", target, data, mode))
+
+    def unexpected_sftp(*args, **kwargs):
+        pytest.fail("Certificate and configuration deployment must not use SFTP")
 
     def reload_node(node):
         events.append(("reload", node["id"]))
         return True, "Reload successful"
 
     monkeypatch.setattr(deploy.sshclient, "run_ssh", run_ssh)
-    monkeypatch.setattr(deploy.sshclient, "sftp_write", sftp_write)
+    monkeypatch.setattr(deploy.sshclient, "ssh_write", ssh_write)
+    monkeypatch.setattr(deploy.sshclient, "sftp_write", unexpected_sftp)
     monkeypatch.setattr(deploy, "reload_node", reload_node)
     monkeypatch.setattr(deploy.runtime, "show_info", lambda node: {})
     monkeypatch.setattr(deploy.alerting, "notify_deploy_failure", lambda *args: None)
@@ -75,7 +79,7 @@ def _deploy(case, entrypoint):
 
 
 @pytest.mark.parametrize("entrypoint", ["certificate", "configuration"])
-def test_remote_deploy_uploads_nonempty_certificate_and_key(remote_certificate, entrypoint):
+def test_remote_deploy_uses_ssh_for_nonempty_certificate_and_key(remote_certificate, entrypoint):
     case = remote_certificate
     result = _deploy(case, entrypoint)
 
@@ -93,6 +97,16 @@ def test_remote_deploy_uploads_nonempty_certificate_and_key(remote_certificate, 
     assert events.index(removal) > events.index(cert_writes[-1])
     assert events.index(("reload", case["node"]["id"])) > events.index(removal)
     assert [event for event in events if event[0] == "run" and "rm " in event[1]] == [removal]
+    config_writes = [
+        event for event in events if event[0] == "write" and event[1].endswith(".cfg.new")
+    ]
+    if entrypoint == "configuration":
+        assert len(config_writes) == 1
+        assert config_writes[0][1] == case["node"]["config_path"] + ".new"
+        assert b"frontend https" in config_writes[0][2]
+        assert f"{CERT_DIR}/{CERT_NAME}.crt".encode() in config_writes[0][2]
+    else:
+        assert config_writes == []
 
 
 @pytest.mark.parametrize("entrypoint", ["certificate", "configuration"])
@@ -107,7 +121,7 @@ def test_remote_upload_failure_prevents_reload(
         if target.endswith(failed_suffix):
             raise OSError("Upload interrupted")
 
-    monkeypatch.setattr(case["deploy"].sshclient, "sftp_write", fail_upload)
+    monkeypatch.setattr(case["deploy"].sshclient, "ssh_write", fail_upload)
     result = _deploy(case, entrypoint)
 
     assert result["ok"] is False
@@ -116,6 +130,25 @@ def test_remote_upload_failure_prevents_reload(
     commands = [event[1] for event in case["events"] if event[0] == "run"]
     assert commands == [f"mkdir -p {CERT_DIR}"]
     assert all(event[1].startswith(CERT_DIR + "/") for event in case["events"] if event[0] == "write")
+
+
+def test_remote_configuration_upload_failure_prevents_activation(remote_certificate, monkeypatch):
+    case = remote_certificate
+
+    def fail_config_upload(node, target, data, mode=None):
+        case["events"].append(("write", target, data, mode))
+        if target.endswith(".cfg.new"):
+            raise OSError("Configuration upload interrupted")
+
+    monkeypatch.setattr(case["deploy"].sshclient, "ssh_write", fail_config_upload)
+    result = _deploy(case, "configuration")
+
+    assert result["ok"] is False
+    assert "Configuration upload interrupted" in result["error"]
+    assert not any(event[0] == "reload" for event in case["events"])
+    assert [event[1] for event in case["events"] if event[0] == "run"] == [
+        f"mkdir -p {CERT_DIR}", f"rm -f {CERT_DIR}/{CERT_NAME}.pem"
+    ]
 
 
 @pytest.mark.parametrize("entrypoint", ["certificate", "configuration"])
@@ -158,6 +191,7 @@ def test_invalid_pairs_have_no_side_effects(tmp_path, monkeypatch, invalid_files
         pytest.fail("Invalid certificate pairs must be rejected before network access")
 
     monkeypatch.setattr(deploy.sshclient, "run_ssh", unexpected_network)
+    monkeypatch.setattr(deploy.sshclient, "ssh_write", unexpected_network)
     monkeypatch.setattr(deploy.sshclient, "sftp_write", unexpected_network)
     with pytest.raises(ValueError):
         if local:

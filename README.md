@@ -217,8 +217,13 @@ und mit *Test* prüfen. Der Runtime-Socket-Pfad wird in die generierte Config ü
    benötigten API-Credentials eintragen (z. B. Cloudflare: `CLOUDFLARE_DNS_API_TOKEN`)
 3. Die Ausstellung läuft im Hintergrund (DNS-Propagation: ca. 1–2 Minuten)
 4. Das Zertifikat in einem SSL-Frontend auswählen und die Config deployen –
-   die PEM-Dateien werden automatisch mit auf die Nodes kopiert (`cert_dir`)
+   Zertifikat und Schlüssel werden als `.crt` und `.key` auf die Nodes kopiert (`cert_dir`)
 5. **Auto-Renew** erneuert Zertifikate ab < 30 Tagen Restlaufzeit und verteilt sie neu
+
+Zertifikate und Konfigurationen werden über den normalen SSH-Kanal übertragen.
+Die Zieldatei wird erst ersetzt, nachdem Dateigröße und SHA-256 der temporären
+Datei geprüft wurden. Auf den Nodes werden dafür `sh`, `mktemp`, `cat`, `wc`,
+`sha256sum`, `chmod`, `stat`, `mv` und `rm` benötigt.
 
 Weitere lego-Provider lassen sich in [app/services/certs.py](app/services/certs.py)
 (`PROVIDERS`) ergänzen – lego unterstützt

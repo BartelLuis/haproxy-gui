@@ -1,4 +1,6 @@
 import io
+import shutil
+import subprocess
 import threading
 from types import SimpleNamespace
 
@@ -8,16 +10,62 @@ import pytest
 from app.services import sshclient
 
 
+class FakeExecChannel:
+    def __init__(self, stdout=b"", stderr=b"", status=0, require_input=False):
+        self.output = bytearray(stdout)
+        self.errors = bytearray(stderr)
+        self.status = status
+        self.received = bytearray()
+        self.closed = False
+        self.eof_received = not require_input
+        self.input_closed = False
+        self.require_input = require_input
+
+    def recv_ready(self):
+        return bool(self.output)
+
+    def recv_stderr_ready(self):
+        return bool(self.errors)
+
+    def recv(self, size):
+        result = bytes(self.output[:size])
+        del self.output[:size]
+        return result
+
+    def recv_stderr(self, size):
+        result = bytes(self.errors[:size])
+        del self.errors[:size]
+        return result
+
+    def send_ready(self):
+        return True
+
+    def send(self, data):
+        assert not self.input_closed
+        count = min(7, len(data))
+        self.received.extend(data[:count])
+        return count
+
+    def shutdown_write(self):
+        self.input_closed = True
+        self.eof_received = True
+
+    def exit_status_ready(self):
+        return not self.require_input or self.input_closed
+
+    def recv_exit_status(self):
+        assert not self.output and not self.errors
+        return self.status
+
+
 def test_run_ssh_preserves_exit_status_and_output(monkeypatch):
     closed = []
-    stdout = io.BytesIO(b"command output\n")
-    stdout.channel = SimpleNamespace(recv_exit_status=lambda: 7)
-    stderr = io.BytesIO(b"error \xff\n")
+    channel = FakeExecChannel(b"command output\n", b"error \xff\n", status=7)
 
     def exec_command(command, timeout):
         assert command == "test command"
         assert timeout == 3
-        return None, stdout, stderr
+        return None, SimpleNamespace(channel=channel), None
 
     client = SimpleNamespace(
         exec_command=exec_command, close=lambda: closed.append(True),
@@ -29,6 +77,24 @@ def test_run_ssh_preserves_exit_status_and_output(monkeypatch):
     assert closed == [True]
 
 
+def test_exec_ssh_sends_all_stdin_without_closing_it_early(monkeypatch):
+    channel = FakeExecChannel(b"output", b"errors", require_input=True)
+    client = SimpleNamespace(
+        exec_command=lambda command, timeout: (
+            paramiko.channel.ChannelStdinFile(channel, "wb"),
+            SimpleNamespace(channel=channel), None,
+        ),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(sshclient, "ssh_connect", lambda node: client)
+    payload = b"private payload\x00\xff\n" * 20
+    assert sshclient._exec_ssh({}, "test", input_data=payload) == (
+        0, "output", "errors",
+    )
+    assert bytes(channel.received) == payload
+    assert channel.input_closed
+
+
 @pytest.mark.parametrize("stage", ["exec", "status", "read"])
 def test_run_ssh_stalled_operations_are_bounded(monkeypatch, stage):
     closed = threading.Event()
@@ -37,23 +103,100 @@ def test_run_ssh_stalled_operations_are_bounded(monkeypatch, stage):
         assert closed.wait(2), "SSH command was not stopped by its deadline"
         raise paramiko.SSHException("Connection closed")
 
-    stdout = SimpleNamespace(
-        channel=SimpleNamespace(
-            recv_exit_status=wait_for_close if stage == "status" else lambda: 0,
-        ),
-        read=wait_for_close if stage == "read" else lambda: b"",
-    )
+    channel = FakeExecChannel()
+    if stage == "status":
+        channel.exit_status_ready = lambda: False
+    elif stage == "read":
+        channel.recv_ready = lambda: True
+        channel.recv = lambda size: wait_for_close()
 
     def exec_command(command, timeout):
         if stage == "exec":
             wait_for_close()
-        return None, stdout, io.BytesIO()
+        return None, SimpleNamespace(channel=channel), None
 
     client = SimpleNamespace(exec_command=exec_command, close=closed.set)
     monkeypatch.setattr(sshclient, "ssh_connect", lambda node: client)
     with pytest.raises(TimeoutError, match="Zeitüberschreitung.*remote-node"):
         sshclient.run_ssh({"name": "remote-node"}, "test command", timeout=0.05)
     assert closed.is_set()
+
+
+def test_ssh_connect_closes_failed_connection(monkeypatch):
+    closed = []
+
+    def connect(**kwargs):
+        raise paramiko.AuthenticationException("Denied")
+
+    client = SimpleNamespace(
+        set_missing_host_key_policy=lambda policy: None,
+        connect=connect, close=lambda: closed.append(True),
+    )
+    monkeypatch.setattr(sshclient.paramiko, "SSHClient", lambda: client)
+    with pytest.raises(paramiko.AuthenticationException, match="Denied"):
+        sshclient.ssh_connect({"host": "example.com", "ssh_password": "test"})
+    assert closed == [True]
+
+
+def test_ssh_write_passes_private_bytes_only_over_stdin(monkeypatch):
+    payload = b"-----BEGIN PRIVATE KEY-----\nsecret bytes\x00\xff\n"
+    calls = []
+
+    def execute(node, command, timeout, input_data):
+        calls.append((command, timeout, input_data))
+        return 0, "", ""
+
+    monkeypatch.setattr(sshclient, "_exec_ssh", execute)
+    sshclient.ssh_write({}, "/etc/haproxy/certs/example.key", payload, mode=0o600)
+    command, timeout, sent = calls[0]
+    assert sent == payload
+    assert command.startswith("sh -c ")
+    assert "PRIVATE KEY" not in command and "secret bytes" not in command
+    assert "sha256sum" in command and "chmod 600" in command
+    assert timeout == 60
+
+
+@pytest.mark.parametrize("failure", ["command", "timeout"])
+def test_ssh_write_errors_include_destination(monkeypatch, failure):
+    def execute(*args, **kwargs):
+        if failure == "timeout":
+            raise TimeoutError("SSH timeout")
+        return 1, "", "Disk full"
+
+    monkeypatch.setattr(sshclient, "_exec_ssh", execute)
+    with pytest.raises(OSError, match="example.key"):
+        sshclient.ssh_write({}, "/etc/haproxy/certs/example.key", b"key", mode=0o600)
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_ssh_write_script_verifies_and_atomically_installs(
+    tmp_path, monkeypatch, corrupt,
+):
+    shell = shutil.which("sh")
+    if shell is None:
+        pytest.skip("POSIX shell required for remote script execution")
+    target = tmp_path / "example.key"
+    target.write_bytes(b"old key")
+    payload = b"new key\x00with binary data\xff\n"
+
+    def execute(node, command, timeout, input_data):
+        if corrupt:
+            input_data = b"!" * len(input_data)
+        proc = subprocess.run(
+            [shell, "-c", command], input=input_data, capture_output=True,
+            timeout=timeout, check=False,
+        )
+        return proc.returncode, proc.stdout.decode(), proc.stderr.decode()
+
+    monkeypatch.setattr(sshclient, "_exec_ssh", execute)
+    if corrupt:
+        with pytest.raises(OSError, match="SHA-256"):
+            sshclient.ssh_write({}, target.as_posix(), payload, mode=0o600)
+        assert target.read_bytes() == b"old key"
+    else:
+        sshclient.ssh_write({}, target.as_posix(), payload, mode=0o600)
+        assert target.read_bytes() == payload
+    assert list(tmp_path.iterdir()) == [target]
 
 
 class FakeSFTP:

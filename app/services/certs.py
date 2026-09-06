@@ -506,7 +506,7 @@ def deploy_cert(cert_id):
             try:
                 cert_target = node["cert_dir"].rstrip("/") + "/" + cert_file
                 key_target = node["cert_dir"].rstrip("/") + "/" + key_file
-                deploysvc.install_cert_files(node, {cert_file: pem, key_file: key})
+                deploysvc.install_cert_files(node, {cert_file: pem, key_file: key}, log=log)
                 log.append(
                     f"Zertifikat nach {cert_target} ({len(pem)} Bytes) und Schlüssel nach "
                     f"{key_target} ({len(key)} Bytes) übertragen und geprüft"

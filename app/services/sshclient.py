@@ -1,8 +1,10 @@
 import base64
+import hashlib
 import io
 import logging
 import os
 import posixpath
+import shlex
 import stat
 import threading
 import uuid
@@ -88,11 +90,19 @@ def ssh_connect(node, timeout=10):
             kwargs["passphrase"] = ssh_password
     elif ssh_password:
         kwargs["password"] = ssh_password
-    client.connect(**kwargs)
+    try:
+        client.connect(**kwargs)
+    except Exception:
+        client.close()
+        raise
     return client
 
 
 def run_ssh(node, command, timeout=60):
+    return _exec_ssh(node, command, timeout=timeout)
+
+
+def _exec_ssh(node, command, timeout=60, input_data=b""):
     client = ssh_connect(node)
     expired = threading.Event()
 
@@ -105,12 +115,51 @@ def run_ssh(node, command, timeout=60):
     timer.daemon = True
     timer.start()
     try:
-        _, stdout, stderr = client.exec_command(command, timeout=timeout)
-        rc = stdout.channel.recv_exit_status()
+        # Keep stdin alive: Paramiko's stdin destructor sends EOF to the command.
+        _stdin, stdout, _stderr = client.exec_command(command, timeout=timeout)
+        channel = stdout.channel
+        output, errors = [], []
+        sent = 0
+        eof_sent = False
+        while not expired.is_set():
+            active = False
+            if channel.recv_ready():
+                output.append(channel.recv(65536))
+                active = True
+            if channel.recv_stderr_ready():
+                errors.append(channel.recv_stderr(65536))
+                active = True
+            if (
+                channel.exit_status_ready()
+                and (channel.eof_received or channel.closed)
+                and not channel.recv_ready()
+                and not channel.recv_stderr_ready()
+            ):
+                break
+            if (
+                not eof_sent
+                and not channel.closed
+                and not channel.exit_status_ready()
+                and channel.send_ready()
+            ):
+                if sent < len(input_data):
+                    count = channel.send(input_data[sent:sent + 65536])
+                    if count == 0:
+                        raise EOFError("SSH-Verbindung beim Schreiben geschlossen")
+                    sent += count
+                else:
+                    channel.shutdown_write()
+                    eof_sent = True
+                active = True
+            if not active:
+                expired.wait(0.01)
+        if expired.is_set():
+            raise TimeoutError("SSH-Befehl hat zu lange gedauert")
+        rc = channel.recv_exit_status()
         result = (
             rc,
-            stdout.read().decode("utf-8", "replace"),
-            stderr.read().decode("utf-8", "replace"),
+            b"".join(output).decode("utf-8", "replace"),
+            b"".join(errors).decode("utf-8", "replace"),
         )
         if expired.is_set():
             raise TimeoutError("SSH-Befehl hat zu lange gedauert")
@@ -126,6 +175,61 @@ def run_ssh(node, command, timeout=60):
     finally:
         timer.cancel()
         client.close()
+
+
+def ssh_write(node, remote_path, data, mode=None, timeout=60):
+    """Datei über SSH-stdin prüfen und atomar installieren, ohne SFTP."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    directory, basename = posixpath.split(remote_path)
+    if not basename:
+        raise ValueError("SSH-Ziel muss ein Dateipfad sein")
+    template = posixpath.join(directory or ".", f".{basename}.tmp.XXXXXX")
+    digest = hashlib.sha256(data).hexdigest()
+    if mode is None:
+        permissions = (
+            'if [ -e "$target" ]; then\n'
+            '    chmod "$(stat -L -c %a -- "$target")" "$temporary"\n'
+            'else\n'
+            '    chmod 644 "$temporary"\n'
+            'fi'
+        )
+    else:
+        permissions = f'chmod {mode:o} "$temporary"'
+    script = f"""set -eu
+umask 077
+target={shlex.quote(remote_path)}
+if [ -d "$target" ]; then
+    printf '%s\\n' 'SSH-Ziel ist ein Verzeichnis' >&2
+    exit 1
+fi
+temporary=$(mktemp {shlex.quote(template)})
+trap 'rm -f -- "$temporary"' 0
+trap 'exit 1' 1 2 15
+cat > "$temporary"
+actual_size=$(wc -c < "$temporary")
+if [ "$actual_size" -ne {len(data)} ]; then
+    printf '%s\\n' 'SSH-Dateiprüfung fehlgeschlagen: falsche Dateigröße' >&2
+    exit 1
+fi
+actual_hash=$(sha256sum < "$temporary")
+if [ "${{actual_hash%% *}}" != {digest} ]; then
+    printf '%s\\n' 'SSH-Dateiprüfung fehlgeschlagen: SHA-256 stimmt nicht überein' >&2
+    exit 1
+fi
+{permissions}
+mv -f -- "$temporary" "$target"
+"""
+    command = "sh -c " + shlex.quote(script)
+    try:
+        rc, out, err = _exec_ssh(node, command, timeout=timeout, input_data=data)
+    except TimeoutError as exc:
+        raise TimeoutError(f"SSH-Dateiübertragung nach {remote_path}: {exc}") from exc
+    if rc != 0:
+        detail = (err or out).strip() or f"Exit-Code {rc}"
+        raise OSError(
+            f"SSH-Dateiübertragung nach {remote_path} fehlgeschlagen: {detail}"
+        )
 
 
 def _open_sftp(client):
