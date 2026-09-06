@@ -123,6 +123,7 @@ Damit lassen sich mehrere Backends mit unterschiedlichen URLs ohne manuelle ACLs
 | `GUI_PORT`              | `8080`   | Port des Web-Interfaces                         |
 | `ENABLE_LOCAL_HAPROXY`  | `true`   | Eingebetteten HAProxy (Cluster „Local") starten |
 | `HG_DATA`               | `/data`  | Datenverzeichnis (DB, Zertifikate, Config)      |
+| `SSH_TCP_MAXSEG`        | `1024` unter Linux, sonst `0` | Maximale TCP-Segmentgröße für ausgehende SSH-Verbindungen; `0` deaktiviert die Begrenzung |
 
 ## Rollen
 
@@ -201,6 +202,34 @@ Voraussetzungen auf dem Node:
 Danach in der GUI unter **Cluster & Nodes** → *+ Node* die Verbindungsdaten eintragen
 und mit *Test* prüfen. Der Runtime-Socket-Pfad wird in die generierte Config übernommen.
 
+### Kleine SSH-Befehle funktionieren, größere Uploads laufen in einen Timeout
+
+Bei größenabhängigen Übertragungsproblemen begrenzt die GUI unter Linux standardmäßig
+die TCP-Segmentgröße ihrer ausgehenden SSH-Verbindungen auf `1024` Bytes. Das gilt
+für Befehle und Dateiübertragungen einschließlich SFTP. Die Einstellung wirkt pro
+Verbindung; die MTU des Docker-Netzwerks oder Hosts wird dabei nicht geändert.
+Ein erfolgreicher Test mit kleineren Segmenten grenzt das Problem auf größenabhängiges
+Transportverhalten ein, beweist aber keine fehlerhafte Path-MTU-Erkennung als Ursache.
+
+Mit `SSH_TCP_MAXSEG` lässt sich der Wert anpassen; `SSH_TCP_MAXSEG: "0"` im
+`environment`-Abschnitt von Compose deaktiviert die Begrenzung. Ohne eigenen Eintrag
+gilt der Standard automatisch. TCP kann wegen zusätzlicher TCP-Optionen beispielsweise
+`1012` statt `1024` melden. Kleinere Segmente können den Durchsatz verringern.
+Hintergrund: [Linux-Dokumentation zu TCP_MAXSEG](https://man7.org/linux/man-pages/man7/tcp.7.html).
+
+Damit die Korrektur aktiv wird, das aktualisierte Image laden und den Container
+neu erstellen:
+
+```bash
+docker compose pull
+docker compose up -d --force-recreate
+```
+
+Bei lokalem Build stattdessen
+`docker compose -f docker-compose.build.yml up -d --build --force-recreate` verwenden.
+Auch geänderte Compose-Umgebungsvariablen erfordern ein Neuerstellen des Containers;
+ein einfacher `docker compose restart` übernimmt weder ein neues Image noch diese Änderungen.
+
 ### Reload-Kommando (pro Node konfigurierbar)
 
 | Umgebung            | Kommando                                                        |
@@ -217,7 +246,10 @@ und mit *Test* prüfen. Der Runtime-Socket-Pfad wird in die generierte Config ü
    benötigten API-Credentials eintragen (z. B. Cloudflare: `CLOUDFLARE_DNS_API_TOKEN`)
 3. Die Ausstellung läuft im Hintergrund (DNS-Propagation: ca. 1–2 Minuten)
 4. Das Zertifikat in einem SSL-Frontend auswählen und die Config deployen –
-   Zertifikat und Schlüssel werden als `.crt` und `.key` auf die Nodes kopiert (`cert_dir`)
+   Zertifikat und Schlüssel werden als `.crt` und `.key` auf die Nodes kopiert (`cert_dir`).
+   Zusätzlich wird eine `.pem`-Datei mit Zertifikat und Schlüssel atomar aktualisiert,
+   damit bestehende HAProxy-Konfigurationen mit diesem Dateipfad weiterhin funktionieren.
+   Alle drei Dateien erhalten die Dateirechte `600`.
 5. **Auto-Renew** erneuert Zertifikate ab < 30 Tagen Restlaufzeit und verteilt sie neu
 
 Zertifikate und Konfigurationen werden über den normalen SSH-Kanal übertragen.

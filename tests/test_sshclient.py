@@ -15,6 +15,7 @@ class FakeExecChannel:
         self.output = bytearray(stdout)
         self.errors = bytearray(stderr)
         self.status = status
+        self.exit_status = -1 if require_input else status
         self.received = bytearray()
         self.closed = False
         self.eof_received = not require_input
@@ -49,6 +50,7 @@ class FakeExecChannel:
     def shutdown_write(self):
         self.input_closed = True
         self.eof_received = True
+        self.exit_status = self.status
 
     def exit_status_ready(self):
         return not self.require_input or self.input_closed
@@ -77,6 +79,52 @@ def test_run_ssh_preserves_exit_status_and_output(monkeypatch):
     assert closed == [True]
 
 
+@pytest.mark.parametrize("status", [0, 23])
+def test_exec_ssh_retains_output_arriving_after_exit_status(monkeypatch, status):
+    channel = FakeExecChannel(b"remote output", b"remote error", status=status)
+    channel.eof_received = False
+    client = SimpleNamespace(
+        exec_command=lambda command, timeout: (
+            None, SimpleNamespace(channel=channel), None,
+        ),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(sshclient, "ssh_connect", lambda node: client)
+
+    def send_remaining_output():
+        channel.output.extend(b" followed by late output")
+        channel.errors.extend(b" followed by late error")
+        channel.eof_received = True
+
+    delayed_output = threading.Timer(0.02, send_remaining_output)
+    delayed_output.start()
+    try:
+        assert sshclient.run_ssh({}, "test", timeout=1) == (
+            status, "remote output followed by late output",
+            "remote error followed by late error",
+        )
+    finally:
+        delayed_output.cancel()
+
+
+@pytest.mark.parametrize("status", [0, 23])
+def test_exec_ssh_timeout_retains_exit_status_without_remote_eof(monkeypatch, status):
+    channel = FakeExecChannel(b"remote output", b"remote error", status=status)
+    channel.eof_received = False
+    client = SimpleNamespace(
+        exec_command=lambda command, timeout: (
+            None, SimpleNamespace(channel=channel), None,
+        ),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(sshclient, "ssh_connect", lambda node: client)
+    with pytest.raises(sshclient.SSHCommandTimeout) as error:
+        sshclient.run_ssh({}, "test", timeout=0.05)
+    assert error.value.exit_status == status
+    assert error.value.stdout == "remote output"
+    assert error.value.stderr == "remote error"
+
+
 def test_exec_ssh_sends_all_stdin_without_closing_it_early(monkeypatch):
     channel = FakeExecChannel(b"output", b"errors", require_input=True)
     client = SimpleNamespace(
@@ -93,6 +141,26 @@ def test_exec_ssh_sends_all_stdin_without_closing_it_early(monkeypatch):
     )
     assert bytes(channel.received) == payload
     assert channel.input_closed
+
+
+def test_exec_ssh_sends_eof_when_final_bytes_exhaust_send_window(monkeypatch):
+    payload = b"final window bytes"
+    channel = FakeExecChannel(require_input=True)
+    channel.send_ready = lambda: len(channel.received) < len(payload)
+    client = SimpleNamespace(
+        exec_command=lambda command, timeout: (
+            paramiko.channel.ChannelStdinFile(channel, "wb"),
+            SimpleNamespace(channel=channel), None,
+        ),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(sshclient, "ssh_connect", lambda node: client)
+    assert sshclient._exec_ssh({}, "test", timeout=0.05, input_data=payload) == (
+        0, "", "",
+    )
+    assert channel.received == payload
+    assert channel.input_closed
+    assert not channel.send_ready()
 
 
 @pytest.mark.parametrize("stage", ["exec", "status", "read"])
@@ -122,7 +190,64 @@ def test_run_ssh_stalled_operations_are_bounded(monkeypatch, stage):
     assert closed.is_set()
 
 
+@pytest.mark.parametrize("phase", ["send", "await_result"])
+def test_exec_ssh_timeout_preserves_progress_and_partial_output(monkeypatch, phase):
+    payload = b"private input bytes"
+    channel = FakeExecChannel(b"partial output", b"partial error", require_input=True)
+    channel.exit_status_ready = lambda: channel.closed
+    channel.send_ready = lambda: phase != "send"
+
+    def end_input():
+        channel.input_closed = True
+
+    def close():
+        channel.closed = True
+        # Teardown must not overwrite the remote status captured at the deadline.
+        channel.exit_status = 99
+
+    channel.shutdown_write = end_input
+    client = SimpleNamespace(
+        exec_command=lambda command, timeout: (
+            None, SimpleNamespace(channel=channel), None,
+        ),
+        close=close,
+    )
+    monkeypatch.setattr(sshclient, "ssh_connect", lambda node: client)
+    with pytest.raises(sshclient.SSHCommandTimeout) as error:
+        sshclient._exec_ssh(
+            {}, "private command", timeout=0.05, input_data=payload,
+        )
+    exc = error.value
+    assert exc.phase == phase
+    assert exc.bytes_accepted == (0 if phase == "send" else len(payload))
+    assert exc.input_size == len(payload)
+    assert exc.stdin_eof_sent is (phase == "await_result")
+    assert exc.exit_status is None
+    assert exc.stdout == "partial output"
+    assert exc.stderr == "partial error"
+    assert "private input" not in str(exc) and "private command" not in str(exc)
+
+
+def test_exec_start_timeout_has_initialized_progress(monkeypatch):
+    closed = threading.Event()
+
+    def execute(command, timeout):
+        assert closed.wait(2)
+        raise paramiko.SSHException("closed")
+
+    client = SimpleNamespace(exec_command=execute, close=closed.set)
+    monkeypatch.setattr(sshclient, "ssh_connect", lambda node: client)
+    with pytest.raises(sshclient.SSHCommandTimeout) as error:
+        sshclient._exec_ssh({}, "test", timeout=0.05, input_data=b"input")
+    assert error.value.phase == "exec_start"
+    assert error.value.bytes_accepted == 0
+    assert error.value.stdin_eof_sent is False
+    assert error.value.exit_status is None
+    assert error.value.stdout == error.value.stderr == ""
+
+
 def test_ssh_connect_closes_failed_connection(monkeypatch):
+    monkeypatch.setenv("SSH_TCP_MAXSEG", "0")
     closed = []
 
     def connect(**kwargs):
@@ -166,6 +291,35 @@ def test_ssh_write_errors_include_destination(monkeypatch, failure):
     monkeypatch.setattr(sshclient, "_exec_ssh", execute)
     with pytest.raises(OSError, match="example.key"):
         sshclient.ssh_write({}, "/etc/haproxy/certs/example.key", b"key", mode=0o600)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "stage"),
+    [
+        ("HG_UPLOAD_STAGE=prepare\nHG_UPLOAD_STAGE=receive\n", "Dateidaten empfangen"),
+        ("HG_UPLOAD_STAGE=verify\nHG_UPLOAD_STAGE=private-data\n", "Datei prüfen"),
+        ("HG_UPLOAD_STAGE=private-data\n", None),
+        ("HG_UPLOAD_STAGE=receive extra\n", None),
+    ],
+)
+def test_ssh_write_timeout_reports_only_known_remote_stages(monkeypatch, stderr, stage):
+    timeout = sshclient.SSHCommandTimeout(
+        "deadline", phase="await_result", bytes_accepted=3, input_size=3,
+        stdin_eof_sent=True, exit_status=None, stdout="", stderr=stderr,
+    )
+
+    def execute(*args, **kwargs):
+        raise timeout
+
+    monkeypatch.setattr(sshclient, "_exec_ssh", execute)
+    with pytest.raises(TimeoutError) as error:
+        sshclient.ssh_write({}, "/example.key", b"key", mode=0o600)
+    assert error.value.__cause__ is timeout
+    assert "private-data" not in str(error.value)
+    if stage:
+        assert stage in str(error.value)
+    else:
+        assert "letzte Remote-Phase" not in str(error.value)
 
 
 @pytest.mark.parametrize("corrupt", [False, True])

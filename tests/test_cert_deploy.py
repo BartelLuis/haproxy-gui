@@ -39,6 +39,7 @@ def remote_certificate(env, cluster, monkeypatch):
     (source_dir / "example.com.key").write_bytes(KEY_BYTES)
 
     events = []
+    remote_files = {f"{CERT_DIR}/{CERT_NAME}.pem": b"old certificate and key"}
 
     def run_ssh(node, command, **kwargs):
         events.append(("run", command))
@@ -46,6 +47,7 @@ def remote_certificate(env, cluster, monkeypatch):
 
     def ssh_write(node, target, data, mode=None):
         events.append(("write", target, data, mode))
+        remote_files[target] = data
 
     def unexpected_sftp(*args, **kwargs):
         pytest.fail("Certificate and configuration deployment must not use SFTP")
@@ -67,6 +69,7 @@ def remote_certificate(env, cluster, monkeypatch):
         "cluster": cluster["cluster"],
         "node": node,
         "events": events,
+        "remote_files": remote_files,
     }
 
 
@@ -79,8 +82,14 @@ def _deploy(case, entrypoint):
 
 
 @pytest.mark.parametrize("entrypoint", ["certificate", "configuration"])
-def test_remote_deploy_uses_ssh_for_nonempty_certificate_and_key(remote_certificate, entrypoint):
+@pytest.mark.parametrize("legacy_exists", [False, True])
+def test_remote_deploy_preserves_split_files_and_updates_compatible_pem(
+    remote_certificate, entrypoint, legacy_exists
+):
     case = remote_certificate
+    pem_path = f"{CERT_DIR}/{CERT_NAME}.pem"
+    if not legacy_exists:
+        del case["remote_files"][pem_path]
     result = _deploy(case, entrypoint)
 
     assert result["ok"], result
@@ -92,11 +101,11 @@ def test_remote_deploy_uses_ssh_for_nonempty_certificate_and_key(remote_certific
     assert cert_writes == [
         ("write", f"{CERT_DIR}/{CERT_NAME}.crt", CERT_BYTES + ISSUER_BYTES, 0o600),
         ("write", f"{CERT_DIR}/{CERT_NAME}.key", KEY_BYTES, 0o600),
+        ("write", pem_path, CERT_BYTES + ISSUER_BYTES + KEY_BYTES, 0o600),
     ]
-    removal = ("run", f"rm -f {CERT_DIR}/{CERT_NAME}.pem")
-    assert events.index(removal) > events.index(cert_writes[-1])
-    assert events.index(("reload", case["node"]["id"])) > events.index(removal)
-    assert [event for event in events if event[0] == "run" and "rm " in event[1]] == [removal]
+    assert case["remote_files"][pem_path] == CERT_BYTES + ISSUER_BYTES + KEY_BYTES
+    assert events.index(("reload", case["node"]["id"])) > events.index(cert_writes[-1])
+    assert not any(event[0] == "run" and "rm " in event[1] for event in events)
     config_writes = [
         event for event in events if event[0] == "write" and event[1].endswith(".cfg.new")
     ]
@@ -105,12 +114,13 @@ def test_remote_deploy_uses_ssh_for_nonempty_certificate_and_key(remote_certific
         assert config_writes[0][1] == case["node"]["config_path"] + ".new"
         assert b"frontend https" in config_writes[0][2]
         assert f"{CERT_DIR}/{CERT_NAME}.crt".encode() in config_writes[0][2]
+        assert any(line.startswith("3 Zertifikatsdatei(en)") for line in result["log"])
     else:
         assert config_writes == []
 
 
 @pytest.mark.parametrize("entrypoint", ["certificate", "configuration"])
-@pytest.mark.parametrize("failed_suffix", [".crt", ".key"])
+@pytest.mark.parametrize("failed_suffix", [".crt", ".key", ".pem"])
 def test_remote_upload_failure_prevents_reload(
     remote_certificate, monkeypatch, entrypoint, failed_suffix
 ):
@@ -120,6 +130,7 @@ def test_remote_upload_failure_prevents_reload(
         case["events"].append(("write", target, data, mode))
         if target.endswith(failed_suffix):
             raise OSError("Upload interrupted")
+        case["remote_files"][target] = data
 
     monkeypatch.setattr(case["deploy"].sshclient, "ssh_write", fail_upload)
     result = _deploy(case, entrypoint)
@@ -127,6 +138,7 @@ def test_remote_upload_failure_prevents_reload(
     assert result["ok"] is False
     assert "Upload interrupted" in result["error"]
     assert not any(event[0] == "reload" for event in case["events"])
+    assert case["remote_files"][f"{CERT_DIR}/{CERT_NAME}.pem"] == b"old certificate and key"
     commands = [event[1] for event in case["events"] if event[0] == "run"]
     assert commands == [f"mkdir -p {CERT_DIR}"]
     assert all(event[1].startswith(CERT_DIR + "/") for event in case["events"] if event[0] == "write")
@@ -147,7 +159,7 @@ def test_remote_configuration_upload_failure_prevents_activation(remote_certific
     assert "Configuration upload interrupted" in result["error"]
     assert not any(event[0] == "reload" for event in case["events"])
     assert [event[1] for event in case["events"] if event[0] == "run"] == [
-        f"mkdir -p {CERT_DIR}", f"rm -f {CERT_DIR}/{CERT_NAME}.pem"
+        f"mkdir -p {CERT_DIR}"
     ]
 
 
@@ -202,20 +214,45 @@ def test_invalid_pairs_have_no_side_effects(tmp_path, monkeypatch, invalid_files
     assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == old_files
 
 
-def test_local_replace_failure_preserves_existing_files(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failed_suffix", [".crt", ".key", ".pem"])
+def test_local_replace_failure_preserves_prior_pem(tmp_path, monkeypatch, failed_suffix):
     from app.services import deploy
 
     old_files = {"demo.crt": b"old certificate", "demo.key": b"old key", "demo.pem": b"legacy"}
     for name, data in old_files.items():
         (tmp_path / name).write_bytes(data)
 
+    replace = deploy.os.replace
+    expected_files = dict(old_files)
+
     def fail_replace(source, target):
-        assert Path(source).read_bytes() == CERT_BYTES
-        assert Path(target).read_bytes() == old_files[Path(target).name]
-        raise PermissionError("Destination busy")
+        target = Path(target)
+        if target.suffix == failed_suffix:
+            assert target.read_bytes() == old_files[target.name]
+            raise PermissionError("Destination busy")
+        expected_files[target.name] = Path(source).read_bytes()
+        replace(source, target)
 
     monkeypatch.setattr(deploy.os, "replace", fail_replace)
     with pytest.raises(PermissionError, match="Destination busy"):
         deploy._write_cert_files(str(tmp_path), {"demo.crt": CERT_BYTES, "demo.key": KEY_BYTES})
 
-    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == old_files
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == expected_files
+    assert (tmp_path / "demo.pem").read_bytes() == old_files["demo.pem"]
+
+
+@pytest.mark.parametrize("legacy_exists", [False, True])
+@pytest.mark.parametrize("trailing_newline", [False, True])
+def test_local_compatible_pem_is_updated_or_restored(tmp_path, legacy_exists, trailing_newline):
+    from app.services import deploy
+
+    pem = tmp_path / "demo.pem"
+    if legacy_exists:
+        pem.write_bytes(b"old certificate and key")
+    crt = CERT_BYTES if trailing_newline else CERT_BYTES.rstrip(b"\n")
+    count = deploy._write_cert_files(str(tmp_path), {"demo.crt": crt, "demo.key": KEY_BYTES})
+
+    assert count == 3
+    assert (tmp_path / "demo.crt").read_bytes() == crt
+    assert (tmp_path / "demo.key").read_bytes() == KEY_BYTES
+    assert pem.read_bytes() == CERT_BYTES + KEY_BYTES

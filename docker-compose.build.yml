@@ -15,6 +15,8 @@ services:
       ADMIN_PASSWORD: change-me        # unbedingt ändern!
       ENABLE_LOCAL_HAPROXY: "true"     # eingebetteten HAProxy-Cluster "Local" aktivieren
       # GUI_PORT: "8080"
+      # SSH_TCP_MAXSEG: "1024"          # Linux-Standard für ausgehendes SSH; "0" deaktiviert die Begrenzung
+      # Nach Änderungen neu bauen/erstellen: docker compose -f docker-compose.build.yml up -d --build --force-recreate
     volumes:
       - haproxy-gui-data:/data
 

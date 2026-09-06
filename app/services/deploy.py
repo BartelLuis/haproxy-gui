@@ -32,7 +32,7 @@ def _write_cert_files(cert_dir, cert_files):
     grouped = _group_cert_files(cert_files)
     os.makedirs(cert_dir, exist_ok=True)
     for base, payloads in grouped.items():
-        for suffix, data in payloads.items():
+        for suffix, data in _cert_payloads(payloads).items():
             target = os.path.join(cert_dir, base + "." + suffix)
             temp_path = None
             try:
@@ -46,15 +46,19 @@ def _write_cert_files(cert_dir, cert_files):
             finally:
                 if temp_path and os.path.exists(temp_path):
                     os.remove(temp_path)
-        try:
-            os.remove(os.path.join(cert_dir, base + ".pem"))
-        except FileNotFoundError:
-            pass
-    return len(cert_files)
+    return len(grouped) * 3
+
+
+def _cert_payloads(payloads):
+    """PEM zuletzt schreiben, damit bestehende Konfigurationen weiter funktionieren."""
+    crt = payloads["crt"]
+    if not crt.endswith(b"\n"):
+        crt += b"\n"
+    return {"crt": payloads["crt"], "key": payloads["key"], "pem": crt + payloads["key"]}
 
 
 def install_cert_files(node, cert_files, log=None):
-    """Installiert nur vollständige Zertifikat/Key-Paare ohne vorheriges Löschen."""
+    """Installiert Zertifikat/Key-Paare und PEM für bestehende Konfigurationen."""
     if node.get("is_local"):
         return _write_cert_files(node["cert_dir"], cert_files)
     cert_dir = v.clean_path(node["cert_dir"], "cert_dir")
@@ -65,18 +69,14 @@ def install_cert_files(node, cert_files, log=None):
     if rc != 0:
         raise RuntimeError("Zertifikats-Verzeichnis konnte nicht angelegt werden: " + (err or out).strip())
     for base, payloads in grouped.items():
-        for suffix, data in payloads.items():
+        for suffix, data in _cert_payloads(payloads).items():
             target = f"{cert_dir.rstrip('/')}/{base}.{suffix}"
             if log is not None:
                 log.append(f"Übertrage {target} ({len(data)} Bytes) über SSH")
             sshclient.ssh_write(node, target, data, mode=0o600)
             if log is not None:
                 log.append(f"{target}: Inhalt geprüft und Datei aktiviert")
-        legacy = f"{cert_dir.rstrip('/')}/{base}.pem"
-        rc, out, err = sshclient.run_ssh(node, f"rm -f {shlex.quote(legacy)}")
-        if rc != 0:
-            raise RuntimeError("Alte PEM-Datei konnte nicht entfernt werden: " + (err or out).strip())
-    return len(cert_files)
+    return len(grouped) * 3
 
 
 def _local(argv, timeout=60):
@@ -153,8 +153,8 @@ def deploy_node(cluster, node, validate_only=False, content=None,
         new_path = path + ".new"
         q_new, q_path = shlex.quote(new_path), shlex.quote(path)
 
-        install_cert_files(node, cert_files, log=log)
-        log.append(f"{len(cert_files)} Zertifikatsdatei(en) übertragen und geprüft")
+        installed = install_cert_files(node, cert_files, log=log)
+        log.append(f"{installed} Zertifikatsdatei(en) übertragen und geprüft")
 
         if node.get("is_local"):
             with open(new_path, "w") as f:

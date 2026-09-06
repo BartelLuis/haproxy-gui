@@ -217,7 +217,7 @@ def test_pem_bytes_includes_issuer_chain(env):
     assert bundle.index(b"LEAF") < bundle.index(b"INTERMEDIATE")
 
 
-def test_write_cert_files_removes_stale_pem_and_writes_split_files(tmp_path):
+def test_write_cert_files_updates_compatible_pem_and_split_files(tmp_path):
     import app.services.deploy as deploysvc
 
     cert_dir = tmp_path / "certs"
@@ -231,10 +231,10 @@ def test_write_cert_files_removes_stale_pem_and_writes_split_files(tmp_path):
     }
 
     count = deploysvc._write_cert_files(str(cert_dir), cert_files)
-    assert count == 2
+    assert count == 3
     assert (cert_dir / "demo.example.com.crt").read_bytes() == cert_files["demo.example.com.crt"]
     assert (cert_dir / "demo.example.com.key").read_bytes() == cert_files["demo.example.com.key"]
-    assert not legacy.exists()
+    assert legacy.read_bytes() == cert_files["demo.example.com.crt"] + cert_files["demo.example.com.key"]
 
 
 def test_manual_challenge_flow(env):
