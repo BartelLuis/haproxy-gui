@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import ipaddress
 import re
+import logging
 
 from .. import auth, db as dbmod
 from ..db import audit
@@ -9,6 +10,7 @@ from ..services import keepalived as ksvc
 from ..services import validate as v
 
 router = APIRouter(prefix="/api/clusters/{cid}/keepalived", tags=["keepalived"])
+logger = logging.getLogger(__name__)
 
 
 class KeepalivedNodeIn(BaseModel):
@@ -124,6 +126,7 @@ def status(cid: int, user=Depends(auth.require_auth)):
     for n in nodes:
         try:
             out.append(ksvc.node_status(n))
-        except Exception as exc:
-            out.append({"node": n["name"], "status": f"Fehler: {exc}"})
+        except Exception:
+            logger.exception("Failed to fetch keepalived status for node '%s' in cluster %s", n["name"], cid)
+            out.append({"node": n["name"], "status": "Fehler bei der Statusabfrage"})
     return out
