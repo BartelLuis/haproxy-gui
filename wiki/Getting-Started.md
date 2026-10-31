@@ -5,6 +5,7 @@ Ziel: In 5 Minuten von null zu einem laufenden Load-Balancer.
 ## 1. Starten
 
 ```bash
+export ADMIN_PASSWORD='replace-with-a-strong-unique-password'
 docker compose up -d
 ```
 

@@ -71,13 +71,15 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 **Vorgefertigtes Image von GHCR** (wird bei jedem Push auf `main` gebaut, amd64 + arm64):
 
 ```bash
+export ADMIN_PASSWORD='replace-with-a-strong-unique-password'
+
 # Variante 1: Docker Compose (empfohlen) – nutzt das GHCR-Image, kein Build
 docker compose up -d
 
 # Variante 2: docker run
 docker run -d --name haproxy-gui \
   -p 8080:8080 -p 80:80 -p 443:443 \
-  -e ADMIN_PASSWORD='sicheres-passwort' \
+  -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   -v haproxy-gui-data:/data \
   ghcr.io/bartelluis/haproxy-gui:latest
 ```
@@ -88,7 +90,7 @@ docker run -d --name haproxy-gui \
 docker compose -f docker-compose.build.yml up -d --build
 ```
 
-GUI öffnen: <http://localhost:8080> (Standard-Login: `admin` / Wert von `ADMIN_PASSWORD`)
+GUI öffnen: <http://localhost:8080> (Login: `admin` / Wert von `ADMIN_PASSWORD`)
 
 ## Einfacher Reverse Proxy
 
@@ -133,7 +135,7 @@ Damit lassen sich mehrere Backends mit unterschiedlichen URLs ohne manuelle ACLs
 | Variable                | Standard | Beschreibung                                   |
 | ----------------------- | -------- | ---------------------------------------------- |
 | `ADMIN_USER`            | `admin`  | Initialer Admin-Benutzer (weitere in der GUI)   |
-| `ADMIN_PASSWORD`        | `admin`  | Initiales Admin-Passwort – **unbedingt setzen!** |
+| `ADMIN_PASSWORD`        | –        | Erforderlich für die Ersteinrichtung; muss ein starkes, individuelles Passwort sein |
 | `GUI_PORT`              | `8080`   | Port des Web-Interfaces                         |
 | `GUI_HOST`              | `""`     | Listen-Host; leer bindet IPv4 und IPv6, `0.0.0.0` nur IPv4 |
 | `TRUSTED_PROXIES`       | leer     | Kommagetrennte Proxy-CIDRs, deren `X-Forwarded-For` vertraut wird |
@@ -293,7 +295,7 @@ python -m venv .venv
 .venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 $env:HG_DATA = "./data"       # Windows PowerShell
-$env:ADMIN_PASSWORD = "admin"
+$env:ADMIN_PASSWORD = "replace-with-a-strong-unique-password"
 uvicorn app.main:app --reload --port 8080
 ```
 

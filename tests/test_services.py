@@ -135,7 +135,7 @@ def test_smtp_does_not_authenticate_when_starttls_fails(services, monkeypatch):
     })
 
     class SMTP:
-        authenticated = False
+        login_calls = []
 
         def __init__(self, *args, **kwargs):
             pass
@@ -153,14 +153,14 @@ def test_smtp_does_not_authenticate_when_starttls_fails(services, monkeypatch):
             raise smtplib.SMTPException("STARTTLS unavailable")
 
         def login(self, *args):
-            self.authenticated = True
+            self.login_calls.append(args)
 
         def send_message(self, *args):
             raise AssertionError("Message must not be sent")
 
     monkeypatch.setattr(svc.smtplib, "SMTP", SMTP)
     assert svc.send("test") == ["SMTP: Versand fehlgeschlagen"]
-    assert not SMTP.authenticated
+    assert SMTP.login_calls == []
 
 
 def test_metrics_parser(services):
