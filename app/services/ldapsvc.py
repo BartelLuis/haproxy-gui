@@ -72,6 +72,7 @@ def authenticate(username, password):
         server = ldap3.Server(
             st["server_uri"],
             get_info=ldap3.NONE,
+            connect_timeout=5,
             tls=ldap3.Tls(validate=ssl.CERT_REQUIRED) if st.get("use_tls") else None,
         )
         # 1) Service-Bind zum Suchen (falls konfiguriert)
@@ -124,7 +125,9 @@ def test_connection():
     except ImportError:
         return False, "ldap3 ist nicht installiert"
     try:
-        server = ldap3.Server(st["server_uri"], get_info=ldap3.NONE)
+        server = ldap3.Server(
+            st["server_uri"], get_info=ldap3.NONE, connect_timeout=5
+        )
         conn = ldap3.Connection(
             server,
             user=st.get("bind_dn") or None,

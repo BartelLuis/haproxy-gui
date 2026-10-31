@@ -1,4 +1,5 @@
 import difflib
+import ipaddress
 import socket
 from concurrent.futures import ThreadPoolExecutor
 
@@ -35,6 +36,13 @@ def portscan(body: PortScanIn, user=Depends(auth.require_auth)):
     host = body.host.strip()
     if not host:
         raise HTTPException(400, "Host erforderlich")
+    if host.startswith("[") and host.endswith("]"):
+        candidate = host[1:-1]
+        try:
+            ipaddress.IPv6Address(candidate)
+        except ValueError as exc:
+            raise HTTPException(400, "Klammern sind nur für IPv6-Adressen gültig") from exc
+        host = candidate
     ports = [p for p in body.ports if 0 < p < 65536] or DEFAULT_PORTS
     ports = sorted(set(ports))[:200]
     with ThreadPoolExecutor(max_workers=50) as pool:

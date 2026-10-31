@@ -104,6 +104,36 @@ def reload_node(node):
     return rc == 0, text or "Reload ausgeführt"
 
 
+def _rollback_local(path, node, log):
+    backup = path + ".bak"
+    if not os.path.isfile(backup):
+        log.append("Rollback fehlgeschlagen: keine vorherige Config-Sicherung vorhanden")
+        return False
+    try:
+        shutil.copy2(backup, path)
+        success, message = reload_node(node)
+        log.append("Vorherige Config wiederhergestellt; " + message)
+        return success
+    except OSError as exc:
+        log.append(f"Rollback fehlgeschlagen: {exc}")
+        return False
+
+
+def _rollback_remote(node, path, log):
+    backup = path + ".bak"
+    q_backup, q_path = shlex.quote(backup), shlex.quote(path)
+    rc, out, err = sshclient.run_ssh(
+        node,
+        f"test -f {q_backup} && cp -p {q_backup} {q_path}",
+    )
+    if rc != 0:
+        log.append("Rollback fehlgeschlagen: " + ((err or out).strip() or "keine Config-Sicherung vorhanden"))
+        return False
+    success, message = reload_node(node)
+    log.append("Vorherige Config wiederhergestellt; " + message)
+    return success
+
+
 def deploy_node(cluster, node, validate_only=False, content=None,
                 user="system", note=""):
     log = []
@@ -175,6 +205,7 @@ def deploy_node(cluster, node, validate_only=False, content=None,
             success, msg = reload_node(node)
             log.append(msg)
             if not success:
+                _rollback_local(path, node, log)
                 return fail("Reload fehlgeschlagen: " + msg)
         else:
             sshclient.ssh_write(node, new_path, cfg.encode())
@@ -191,13 +222,22 @@ def deploy_node(cluster, node, validate_only=False, content=None,
             if validate_only:
                 sshclient.run_ssh(node, f"rm -f {q_new}")
                 return ok()
-            sshclient.run_ssh(
-                node, f"cp {q_path} {q_path}.bak 2>/dev/null; mv {q_new} {q_path}"
+            q_backup = shlex.quote(path + ".bak")
+            rc, out, err = sshclient.run_ssh(
+                node,
+                f"if [ -f {q_path} ]; then cp -p {q_path} {q_backup} || exit; "
+                f"else rm -f {q_backup}; fi && mv {q_new} {q_path}",
             )
+            if rc != 0:
+                return fail(
+                    "Aktivierung fehlgeschlagen: "
+                    + ((err or out).strip() or "Config-Datei konnte nicht ersetzt werden")
+                )
             log.append(f"Konfiguration aktiviert (Backup: {path}.bak)")
             success, msg = reload_node(node)
             log.append(msg)
             if not success:
+                _rollback_remote(node, path, log)
                 return fail("Reload fehlgeschlagen: " + msg)
 
         try:

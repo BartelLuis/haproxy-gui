@@ -12,6 +12,10 @@
     String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
     }[c]));
+  const hostPort = (host, port) => {
+    const value = String(host == null ? "" : host).replace(/^\[|\]$/g, "");
+    return `${value.includes(":") ? `[${value}]` : value}:${port}`;
+  };
   const js = (v) => String(v == null ? "" : v).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
   async function api(path, method, body) {
@@ -358,7 +362,7 @@
                   (n) => `
                 <tr>
                   <td>${esc(n.name)}</td>
-                  <td>${esc(n.host)}${n.is_local ? "" : ":" + (n.ssh_port || 22)}</td>
+                  <td>${esc(n.is_local ? n.host : hostPort(n.host, n.ssh_port || 22))}</td>
                   <td>${n.is_local ? "lokal" : "SSH (" + esc(n.ssh_user) + ")"}</td>
                   <td>${esc(n.socket_type)}</td>
                   <td>
@@ -540,7 +544,7 @@
         <div class="card">
           <div class="card-head"><h3>${esc(c.name)}</h3></div>
           <table class="data">
-            <thead><tr><th>Name</th><th>Bind</th><th>Mode</th><th>SSL</th><th>Default-Backend</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Bind</th><th>Mode</th><th>SSL</th><th>Rate-Limit</th><th>Default-Backend</th><th></th></tr></thead>
             <tbody>
               ${fes
                 .map((f) => {
@@ -548,9 +552,12 @@
                   return `
                 <tr>
                   <td>${esc(f.name)}</td>
-                  <td>${esc(f.bind_ip)}:${f.port}</td>
+                  <td>${esc(hostPort(f.bind_family === "dual" ? "*" : f.bind_ip, f.port))} ${
+                    f.bind_family === "dual" ? "(IPv4 + IPv6)" : f.bind_family === "ipv6" ? "(IPv6)" : ""
+                  }</td>
                   <td>${esc(f.mode)}</td>
                   <td>${f.use_ssl ? esc(certName(f.cert_id)) : "-"}</td>
+                  <td>${f.rate_limit_requests ? `${f.rate_limit_requests} / ${f.rate_limit_period}s` : "-"}</td>
                   <td>${be ? esc(be.name) : "-"}</td>
                   <td>
                     <button class="btn sm" onclick="App.editFrontend(${f.id})">Bearbeiten</button>
@@ -621,6 +628,13 @@
       <div class="row">
         <label>Name<input name="name" required value="${esc(f ? f.name : "")}"></label>
         <label>Bind-IP<input name="bind_ip" value="${esc(f ? f.bind_ip : "*")}"></label>
+        <label>IP-Familie
+          <select name="bind_family" id="fe-bind-family">
+            <option value="ipv4" ${!f || !f.bind_family || f.bind_family === "ipv4" ? "selected" : ""}>IPv4</option>
+            <option value="ipv6" ${f && f.bind_family === "ipv6" ? "selected" : ""}>IPv6</option>
+            <option value="dual" ${f && f.bind_family === "dual" ? "selected" : ""}>IPv4 + IPv6</option>
+          </select>
+        </label>
         <label style="max-width:110px">Port<input name="port" type="number" required value="${
           f ? f.port : 443
         }"></label>
@@ -640,6 +654,19 @@
       </div>
       <label>Zertifikat<select name="cert_id">${certOptions(f ? f.cert_id : null)}</select></label>
       <label>Default-Backend<select name="default_backend_id" id="fe-backend"></select></label>
+      <div class="row">
+        <label>Max. HTTP-Anfragen pro Client (0 = aus)
+          <input name="rate_limit_requests" type="number" min="0" max="100000" value="${
+            f ? f.rate_limit_requests || 0 : 0
+          }">
+        </label>
+        <label>Zeitraum in Sekunden
+          <input name="rate_limit_period" type="number" min="1" max="3600" value="${
+            f ? f.rate_limit_period || 10 : 10
+          }">
+        </label>
+      </div>
+      <p class="muted">IPv6-Adressen werden für das Limit pro /64 zusammengefasst.</p>
       <h4>URL-Routen (einfach)</h4>
       <p class="muted">Host, Pfad oder beides auf ein Backend weiterleiten. Beispiel: app.example.com → app, /admin → admin.</p>
       <table class="data"><thead><tr><th>Backend</th><th>Host</th><th>Pfad</th><th></th></tr></thead>
@@ -658,6 +685,9 @@
     );
 
     const backendSel = $("#fe-backend", form);
+    $("#fe-bind-family", form).onchange = (event) => {
+      if (event.target.value === "dual") form.elements.bind_ip.value = "*";
+    };
     const fillBackends = () => {
       const cid = parseInt($("#fe-cluster", form).value, 10);
       backendSel.innerHTML =
@@ -729,6 +759,7 @@
         cluster_id: parseInt(fd.get("cluster_id"), 10),
         name: fd.get("name").trim(),
         bind_ip: fd.get("bind_ip").trim() || "*",
+        bind_family: fd.get("bind_family"),
         port: parseInt(fd.get("port"), 10),
         mode: fd.get("mode"),
         use_ssl: fd.get("use_ssl") === "on",
@@ -740,6 +771,8 @@
         acls: aclList,
         rules: [...routeList, ...ruleList],
         extra: fd.get("extra") || "",
+        rate_limit_requests: parseInt(fd.get("rate_limit_requests"), 10) || 0,
+        rate_limit_period: parseInt(fd.get("rate_limit_period"), 10) || 10,
       };
       try {
         if (f) await api(`/api/frontends/${f.id}`, "PUT", body);
@@ -785,7 +818,7 @@
                   <td>${esc(b.balance)}</td>
                   <td>${esc(b.check_path || "-")}</td>
                   <td>${b.servers
-                    .map((s) => `${esc(s.name)} (${esc(s.host)}:${s.port})`)
+                    .map((s) => `${esc(s.name)} (${esc(hostPort(s.host, s.port))})`)
                     .join(", ") || '<span class="muted">keine</span>'}</td>
                   <td>
                     <button class="btn sm" onclick="App.editBackend(${b.id})">Bearbeiten</button>
@@ -806,7 +839,7 @@
     s = s || {};
     return `<tr>
       <td><input class="srv-name" placeholder="web1" value="${esc(s.name || "")}"></td>
-      <td><input class="srv-host" placeholder="10.0.0.1" value="${esc(s.host || "")}"></td>
+      <td><input class="srv-host" placeholder="2001:db8::1 oder 10.0.0.1" value="${esc(s.host || "")}"></td>
       <td style="width:90px"><input class="srv-port" type="number" placeholder="8080" value="${
         s.port || ""
       }"></td>
@@ -1423,15 +1456,18 @@
       const cfg = data.config;
       $("#ka-body").innerHTML = `
         <div class="row">
-          <label>Virtuelle IP (VIP, mit CIDR)<input id="ka-vip" placeholder="192.168.1.10/24" value="${esc(cfg.vip)}"></label>
+          <label>Virtuelle IPs (eine pro Zeile, jeweils mit CIDR)<textarea id="ka-vip" rows="3" placeholder="192.168.1.10/24&#10;2001:db8::10/64">${esc(cfg.vip)}</textarea></label>
           <label>Interface<input id="ka-iface" value="${esc(cfg.iface || "eth0")}"></label>
         </div>
         <div class="row">
           <label style="max-width:160px">Virtual Router ID<input id="ka-vrid" type="number" value="${cfg.vr_id || 51}"></label>
           <label style="max-width:220px">Auth-Passwort (max. 8 Zeichen)<input id="ka-pass" value="${esc(cfg.auth_pass)}"></label>
+          <label class="check"><input id="ka-track" type="checkbox" ${
+            cfg.track_haproxy ? "checked" : ""
+          }> HAProxy-Ausfall als VRRP-Fehler werten</label>
         </div>
         <h4>Nodes</h4>
-        <table class="data"><thead><tr><th>Node</th><th>Rolle</th><th>Priorität</th></tr></thead>
+        <table class="data"><thead><tr><th>Node</th><th>Rolle</th><th>Priorität</th><th>Unicast-Peer-IP</th></tr></thead>
         <tbody>${data.nodes
           .map(
             (n) => `<tr data-node="${n.id}">
@@ -1441,6 +1477,7 @@
               <option value="BACKUP" ${n.state !== "MASTER" ? "selected" : ""}>BACKUP</option>
             </select></td>
             <td><input class="ka-prio" type="number" value="${n.priority}" style="width:90px"></td>
+            <td><input class="ka-peer" placeholder="2001:db8::10" value="${esc(n.peer_ip || "")}"></td>
           </tr>`
           )
           .join("")}</tbody></table>
@@ -1456,10 +1493,12 @@
         iface: $("#ka-iface").value.trim() || "eth0",
         vr_id: parseInt($("#ka-vrid").value, 10) || 51,
         auth_pass: $("#ka-pass").value.trim(),
+        track_haproxy: $("#ka-track").checked,
         nodes: $$("#ka-body tr[data-node]").map((tr) => ({
           node_id: parseInt(tr.dataset.node, 10),
           state: $(".ka-state", tr).value,
           priority: parseInt($(".ka-prio", tr).value, 10) || 100,
+          peer_ip: $(".ka-peer", tr).value.trim(),
         })),
       });
       $("#ka-save").onclick = async () => {
@@ -1520,7 +1559,7 @@
       <div class="card">
         <h3>Port-Scanner</h3>
         <div class="row">
-          <label>Host<input id="ps-host" placeholder="10.0.0.1"></label>
+          <label>Host<input id="ps-host" placeholder="2001:db8::1 oder 10.0.0.1"></label>
           <label>Ports (Komma-getrennt, leer = Standard)<input id="ps-ports" placeholder="80,443,3306"></label>
         </div>
         <div class="btn-row"><button class="btn" id="ps-run">Scannen</button></div>

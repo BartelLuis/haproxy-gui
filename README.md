@@ -9,7 +9,6 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 ![CI](https://github.com/BartelLuis/haproxy-gui/actions/workflows/ci.yml/badge.svg)
 ![GHCR](https://github.com/BartelLuis/haproxy-gui/actions/workflows/publish.yml/badge.svg)
 ![Security](https://github.com/BartelLuis/haproxy-gui/actions/workflows/security.yml/badge.svg)
-![Lint](https://github.com/BartelLuis/haproxy-gui/actions/workflows/lint.yml/badge.svg)
 ![CodeQL](https://github.com/BartelLuis/haproxy-gui/actions/workflows/codeql.yml/badge.svg)
 ![Coverage](https://github.com/BartelLuis/haproxy-gui/actions/workflows/coverage.yml/badge.svg)
 ![Release](https://img.shields.io/github/v/release/BartelLuis/haproxy-gui)
@@ -25,6 +24,9 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
 - **Multi-Cluster:** Beliebig viele HAProxy-Cluster mit je mehreren Nodes
   - Remote-Nodes werden per **SSH** verwaltet (Config-Push, Validierung, Reload)
   - Eingebetteter **Local-Cluster**: HAProxy läuft direkt im Container (optional)
+- **Dual-Stack:** GUI und eingebetteter HAProxy lauschen über IPv4 und IPv6;
+  Frontends können IPv4, IPv6 oder beide Familien verwenden; Server- und VIP-Felder
+  akzeptieren IPv6-Literale
 - **Konfigurations-Management:** Frontends (Binds, SSL, ACLs, `use_backend`-Regeln),
   Backends (Balance-Algorithmen, Health-Checks, Server) – daraus wird pro Node eine
   `haproxy.cfg` generiert
@@ -58,7 +60,10 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
   Einträge zur Laufzeit hinzufügen/löschen
 - **Node-Metriken:** CPU, Load, RAM und Disk pro Node (lokal via /proc, remote via SSH)
 - **Keepalived/VRRP:** Hochverfügbarkeit mit virtueller IP – Config-Generierung,
-  Deploy und Dienst-Status pro Node
+  mehrere IPv4/IPv6-VIPs, Unicast-Peers, optionaler HAProxy-Health-Check, Deploy und
+  Dienst-Status pro Node
+- **HTTP-Rate-Limits:** Pro Frontend konfigurierbar; IPv6-Clients werden per `/64`
+  zusammengefasst
 - **Tools:** TCP-Port-Scanner und Config-Vergleich zwischen zwei Nodes eines Clusters
 
 ## Schnellstart
@@ -92,6 +97,7 @@ Ein minimaler Reverse-Proxy kann mit einem Frontend und einem Backend aufgebaut 
 ```haproxy
 frontend http_in
     bind *:80
+    bind :::80 v6only
     mode http
     default_backend app_backend
 
@@ -103,6 +109,14 @@ backend app_backend
 ```
 
 Das ist der klassische Grundaufbau für das Routing von HTTP-Anfragen auf einen internen Dienst wie eine Webanwendung oder API. In dieser GUI kannst du das über die Bereiche Frontends und Backends konfigurieren, ohne die Datei manuell zu bearbeiten.
+
+Das Compose-Netzwerk aktiviert IPv6. Dafür muss der Docker-Host IPv6-Netzwerke
+unterstützen und IPv6-Routing bereitstellen. Frontend-Binds in der GUI können
+auf IPv4, IPv6 oder beide Familien gesetzt werden. Bei einem Docker-Setup ohne
+IPv6-Unterstützung kann `enable_ipv6: true` im Compose-Netzwerk entfernt werden;
+der GUI-Listener fällt dann auf die verfügbaren Socket-Familien zurück.
+Für die GUI hinter einem Reverse-Proxy `TRUSTED_PROXIES` nur auf die tatsächlichen
+Proxy-Netze setzen; andere `X-Forwarded-For`-Header werden beim Login ignoriert.
 
 ### Mehrere Backends per Host oder Pfad
 
@@ -121,9 +135,19 @@ Damit lassen sich mehrere Backends mit unterschiedlichen URLs ohne manuelle ACLs
 | `ADMIN_USER`            | `admin`  | Initialer Admin-Benutzer (weitere in der GUI)   |
 | `ADMIN_PASSWORD`        | `admin`  | Initiales Admin-Passwort – **unbedingt setzen!** |
 | `GUI_PORT`              | `8080`   | Port des Web-Interfaces                         |
+| `GUI_HOST`              | `""`     | Listen-Host; leer bindet IPv4 und IPv6, `0.0.0.0` nur IPv4 |
+| `TRUSTED_PROXIES`       | leer     | Kommagetrennte Proxy-CIDRs, deren `X-Forwarded-For` vertraut wird |
+| `ENABLE_API_DOCS`       | `false`  | Aktiviert interaktive API-Dokumentation unter `/docs` |
 | `ENABLE_LOCAL_HAPROXY`  | `true`   | Eingebetteten HAProxy (Cluster „Local") starten |
 | `HG_DATA`               | `/data`  | Datenverzeichnis (DB, Zertifikate, Config)      |
 | `SSH_TCP_MAXSEG`        | `1024` unter Linux, sonst `0` | Maximale TCP-Segmentgröße für ausgehende SSH-Verbindungen; `0` deaktiviert die Begrenzung |
+
+`TRUSTED_PROXIES` ist nur bei einem vorgeschalteten Reverse-Proxy zu setzen.
+Trage ausschließlich dessen tatsächliche Netzbereiche ein, da diese Clients
+`X-Forwarded-For` liefern dürfen. Der Container startet Uvicorn ohne dessen
+automatische Proxy-Header-Umschreibung, damit die GUI diese Prüfung selbst
+durchführen kann. Bei manuellem Uvicorn-Start ebenfalls `--no-proxy-headers`
+verwenden.
 
 ## Rollen
 
@@ -197,7 +221,8 @@ Voraussetzungen auf dem Node:
    stats socket /var/run/haproxy/admin.sock mode 660 level admin
    ```
 4. **socat** installiert (für Runtime-Befehle via SSH) – alternativ Socket-Typ `TCP` wählen
-   und `stats socket ipv4@10.0.0.1:9999 level admin` konfigurieren
+   und z. B. `stats socket ipv4@10.0.0.1:9999 level admin` bzw.
+   `stats socket ipv6@2001:db8::1:9999 level admin` konfigurieren
 
 Danach in der GUI unter **Cluster & Nodes** → *+ Node* die Verbindungsdaten eintragen
 und mit *Test* prüfen. Der Runtime-Socket-Pfad wird in die generierte Config übernommen.

@@ -38,6 +38,73 @@ def test_keepalived_generate(env, cluster, services):
     assert "virtual_router_id 51" in cfg
 
 
+def test_keepalived_generates_dual_stack_vips(env, cluster, services):
+    ksvc = services["ksvc"]
+    ksvc.save_cluster_config(
+        cluster["cluster"]["id"],
+        {
+            "vip": "10.0.0.10/24\n2001:db8::10/64",
+            "iface": "eth0",
+            "vr_id": 51,
+            "auth_pass": "geheim",
+        },
+        [],
+    )
+    cfg = ksvc.generate(cluster["cluster"], cluster["node"])
+    assert "virtual_ipaddress {" in cfg
+    assert "10.0.0.10/24" in cfg
+    assert "virtual_ipaddress_excluded {" in cfg
+    assert "2001:db8::10/64" in cfg
+    assert "auth_pass geheim" in cfg
+
+
+def test_keepalived_ipv6_omits_unsupported_auth(env, cluster, services):
+    ksvc = services["ksvc"]
+    ksvc.save_cluster_config(
+        cluster["cluster"]["id"],
+        {
+            "vip": "2001:db8::10/64",
+            "iface": "eth0",
+            "vr_id": 51,
+            "auth_pass": "geheim",
+        },
+        [],
+    )
+    cfg = ksvc.generate(cluster["cluster"], cluster["node"])
+    assert "2001:db8::10/64" in cfg
+    assert "authentication {" not in cfg
+
+
+def test_keepalived_unicast_peer_and_haproxy_tracking(env, cluster, services):
+    ksvc = services["ksvc"]
+    db = env["db"]
+    cluster_id = cluster["cluster"]["id"]
+    first_node = cluster["node"]
+    second_node_id = db.execute(
+        "INSERT INTO nodes (cluster_id, name, host) VALUES (?, 'peer', '10.0.0.2')",
+        (cluster_id,),
+    )
+    ksvc.save_cluster_config(
+        cluster_id,
+        {
+            "vip": "10.0.0.10/24",
+            "iface": "eth0",
+            "vr_id": 51,
+            "track_haproxy": True,
+        },
+        [
+            {"node_id": first_node["id"], "peer_ip": "10.0.0.1"},
+            {"node_id": second_node_id, "peer_ip": "10.0.0.2"},
+        ],
+    )
+    cfg = ksvc.generate(cluster["cluster"], first_node)
+    assert 'script "pidof haproxy"' in cfg
+    assert "track_script {" in cfg
+    assert "unicast_peer {" in cfg
+    assert "10.0.0.2" in cfg
+    assert "\n        10.0.0.1\n" not in cfg
+
+
 def test_keepalived_requires_vip(env, cluster, services):
     with pytest.raises(ValueError, match="VIP"):
         services["ksvc"].generate(cluster["cluster"], cluster["node"])
@@ -130,6 +197,9 @@ def test_validate_module(env):
     assert v.clean_name("lb-01.example_com") == "lb-01.example_com"
     assert v.clean_path("/etc/haproxy/haproxy.cfg")
     assert v.clean_domain("*.example.com")
+    assert v.clean_host("2001:db8::1") == "2001:db8::1"
+    assert v.clean_host("[2001:db8::1]") == "2001:db8::1"
+    assert v.clean_vip("192.0.2.10/24\n2001:db8::10/64").count("\n") == 1
     for bad in ["bad;name", "../etc", "a b", "x;rm -rf /", "$(evil)"]:
         for fn in (v.clean_name, v.clean_path, v.clean_domain, v.clean_host):
             try:
@@ -140,6 +210,22 @@ def test_validate_module(env):
     import pytest
     with pytest.raises(ValueError):
         v.no_newline("zeile1\nzeile2")
+
+
+def test_tcp_runtime_uses_same_default_host_as_generated_socket(env, monkeypatch):
+    from app.services import runtime
+
+    captured = {}
+
+    def fake_tcp_cmd(host, port, cmd):
+        captured.update(host=host, port=port, cmd=cmd)
+        return "ok"
+
+    monkeypatch.setattr(runtime, "_tcp_cmd", fake_tcp_cmd)
+    node = {"socket_type": "tcp", "host": "2001:db8::10", "socket_host": ""}
+    assert runtime.runtime_cmd(node, "show info") == "ok"
+    assert captured["host"] == "2001:db8::10"
+    assert captured["port"] == 9999
 
 
 def test_secret_encryption(env):

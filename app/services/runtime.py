@@ -69,7 +69,11 @@ def runtime_cmd(node, cmd):
     stype = node.get("socket_type") or "ssh"
     if stype == "tcp":
         return _tcp_cmd(
-            node.get("socket_host") or node["host"], node.get("socket_port") or 9999, cmd
+            node.get("socket_host") or (
+                "127.0.0.1" if node.get("is_local") else node["host"]
+            ),
+            node.get("socket_port") or 9999,
+            cmd,
         )
     if stype == "unix":
         return _unix_cmd(node["socket_path"], cmd)

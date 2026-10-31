@@ -46,3 +46,55 @@ def test_api_token_lookup(env):
 def test_role_levels(env):
     auth = env["auth"]
     assert auth.ROLE_LEVEL["viewer"] < auth.ROLE_LEVEL["operator"] < auth.ROLE_LEVEL["admin"]
+
+
+def test_forwarded_ip_is_ignored_without_trusted_proxy(env, monkeypatch):
+    from starlette.requests import Request
+    from app.routers.auth_routes import _client_ip
+
+    monkeypatch.delenv("TRUSTED_PROXIES", raising=False)
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "headers": [(b"x-forwarded-for", b"198.51.100.10")],
+        "client": ("127.0.0.1", 1234),
+        "server": ("test", 80),
+        "scheme": "http",
+        "path": "/",
+        "query_string": b"",
+    })
+    assert _client_ip(request) == "127.0.0.1"
+
+
+def test_forwarded_ip_is_used_only_through_trusted_proxy(env, monkeypatch):
+    from starlette.requests import Request
+    from app.routers.auth_routes import _client_ip
+
+    monkeypatch.setenv("TRUSTED_PROXIES", "127.0.0.1/32")
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "headers": [
+            (b"x-forwarded-for", b"2001:db8:1::10, 127.0.0.1"),
+        ],
+        "client": ("127.0.0.1", 1234),
+        "server": ("test", 80),
+        "scheme": "http",
+        "path": "/",
+        "query_string": b"",
+    })
+    assert _client_ip(request) == "2001:db8:1::10"
+
+
+def test_login_rate_limit_groups_ipv6_by_64(env):
+    from app.routers.auth_routes import _rate_limit_key
+
+    assert _rate_limit_key("2001:db8:1:2::1", "admin") == (
+        "2001:db8:1:2::/64|admin"
+    )
+    assert _rate_limit_key("2001:db8:1:2::abcd", "admin") == (
+        "2001:db8:1:2::/64|admin"
+    )
+    assert _rate_limit_key("::ffff:192.0.2.1", "admin") == (
+        "192.0.2.1/32|admin"
+    )

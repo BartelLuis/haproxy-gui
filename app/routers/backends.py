@@ -44,6 +44,21 @@ def _insert_servers(backend_id, servers):
         )
 
 
+def _validate(body: BackendIn):
+    if body.mode not in ("http", "tcp"):
+        raise HTTPException(400, "Mode muss http oder tcp sein")
+    try:
+        v.clean_name(body.name, "Backend-Name")
+        v.no_newline(body.check_path, "check_path")
+        v.no_newline(body.check_expect, "check_expect")
+        v.no_newline(body.extra, "extra")
+        for server in body.servers:
+            v.clean_name(server.name, "Server-Name")
+            server.host = v.clean_host(server.host, "Server-Host")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.get("")
 def list_backends(cluster_id: int | None = None):
     if cluster_id:
@@ -61,18 +76,7 @@ def list_backends(cluster_id: int | None = None):
 
 @router.post("")
 def create_backend(body: BackendIn, user=Depends(auth.require_auth)):
-    if body.mode not in ("http", "tcp"):
-        raise HTTPException(400, "Mode muss http oder tcp sein")
-    try:
-        v.clean_name(body.name, "Backend-Name")
-        v.no_newline(body.check_path, "check_path")
-        v.no_newline(body.check_expect, "check_expect")
-        v.no_newline(body.extra, "extra")
-        for s in body.servers:
-            v.clean_name(s.name, "Server-Name")
-            v.clean_host(s.host, "Server-Host")
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+    _validate(body)
     try:
         bid = dbmod.execute(
             "INSERT INTO backends (cluster_id, name, mode, balance, check_path,"
@@ -93,6 +97,7 @@ def create_backend(body: BackendIn, user=Depends(auth.require_auth)):
 def update_backend(bid: int, body: BackendIn, user=Depends(auth.require_auth)):
     if not dbmod.one("SELECT id FROM backends WHERE id = ?", (bid,)):
         raise HTTPException(404, "Backend nicht gefunden")
+    _validate(body)
     try:
         dbmod.execute(
             "UPDATE backends SET cluster_id=?, name=?, mode=?, balance=?,"
