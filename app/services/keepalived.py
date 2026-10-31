@@ -1,7 +1,10 @@
 import ipaddress
+import logging
 
 from .. import db as dbmod
 from . import sshclient
+
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = "/etc/keepalived/keepalived.conf"
 
@@ -150,7 +153,13 @@ def deploy_node(cluster, node):
         return {"node": node["name"], "ok": ok,
                 "error": "" if ok else text or "Reload fehlgeschlagen", "log": log}
     except Exception as exc:
-        return {"node": node["name"], "ok": False, "error": str(exc), "log": log}
+        logger.exception("Deploy fehlgeschlagen für Node '%s'", node.get("name"))
+        return {
+            "node": node["name"],
+            "ok": False,
+            "error": "Interner Fehler beim Deploy",
+            "log": log,
+        }
 
 
 def node_status(node):
