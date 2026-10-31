@@ -1276,7 +1276,11 @@
         <div id="rt-maps" class="muted">–</div>
         <div id="rt-map-detail"></div>
       </div>`;
-    const nid = () => $("#rt-node").value;
+    const nid = () => {
+      const raw = $("#rt-node").value;
+      const parsed = Number.parseInt(String(raw), 10);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    };
     $("#rt-load").onclick = async () => {
       const tBox = $("#rt-tables");
       const mBox = $("#rt-maps");
