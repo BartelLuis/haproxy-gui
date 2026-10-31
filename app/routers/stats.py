@@ -138,8 +138,8 @@ def list_maps(nid: int):
         raise HTTPException(404, "Node nicht gefunden")
     try:
         return {"ok": True, "maps": _parse_maps(runtimesvc.runtime_cmd(node, "show map"))}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc), "maps": []}
+    except Exception:
+        return {"ok": False, "error": "Interner Fehler", "maps": []}
 
 
 @router.get("/stats/nodes/{nid}/maps/{map_id}/entries")
