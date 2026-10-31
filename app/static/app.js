@@ -1309,7 +1309,11 @@
         <div id="rt-maps" class="muted">–</div>
         <div id="rt-map-detail"></div>
       </div>`;
-    const nid = () => $("#rt-node").value;
+    const nid = () => {
+      const raw = $("#rt-node").value;
+      const parsed = Number.parseInt(String(raw), 10);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    };
     $("#rt-load").onclick = async () => {
       const tBox = $("#rt-tables");
       const mBox = $("#rt-maps");
@@ -1325,7 +1329,7 @@
                .map(
                  (tb) => `<tr><td>${esc(tb.name)}</td><td>${esc(tb.type || "-")}</td>
                <td>${esc(tb.used || "-")}</td><td>${esc(tb.size || "-")}</td>
-               <td><button class="btn sm danger" onclick="App.clearTable(${nid()}, '${js(tb.name)}')">Leeren</button></td></tr>`
+               <td><button class="btn sm danger" data-table-name="${js(tb.name)}">Leeren</button></td></tr>`
                )
                .join("")}</tbody></table>`
           : '<div class="muted">Keine Stick-Tables definiert.</div>'
@@ -1336,11 +1340,18 @@
              <tbody>${m.maps
                .map(
                  (mp) => `<tr><td>${esc(mp.id)}</td><td>${esc(mp.info)}</td>
-               <td><button class="btn sm" onclick="App.showMapEntries(${nid()}, '${js(mp.id)}')">Einträge</button></td></tr>`
+               <td><button class="btn sm" data-map-id="${js(mp.id)}">Einträge</button></td></tr>`
                )
                .join("")}</tbody></table>`
           : '<div class="muted">Keine Maps definiert.</div>'
         : `<div class="error-text">${esc(m.error)}</div>`;
+
+      $$("#rt-tables button[data-table-name]", tBox).forEach((btn) => {
+        btn.onclick = () => App.clearTable(nid(), btn.getAttribute("data-table-name"));
+      });
+      $$("#rt-maps button[data-map-id]", mBox).forEach((btn) => {
+        btn.onclick = () => App.showMapEntries(nid(), btn.getAttribute("data-map-id"));
+      });
     };
   };
 
