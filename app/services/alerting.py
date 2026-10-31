@@ -102,10 +102,7 @@ def send(message):
             msg.set_content(message)
             with smtplib.SMTP(st["smtp_host"], int(st.get("smtp_port") or 587), timeout=15) as smtp:
                 smtp.ehlo()
-                try:
-                    smtp.starttls()
-                except smtplib.SMTPException:
-                    pass
+                smtp.starttls()
                 if st.get("smtp_user"):
                     smtp.login(st["smtp_user"], st.get("smtp_pass") or "")
                 smtp.send_message(msg)

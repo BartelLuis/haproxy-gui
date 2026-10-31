@@ -10,7 +10,7 @@ from fastapi import Depends, HTTPException, Request
 from . import db
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 TOKEN_TTL = int(os.environ.get("TOKEN_TTL_HOURS", "12")) * 3600
 ROLE_LEVEL = {"viewer": 1, "operator": 2, "admin": 3}
 
@@ -107,6 +107,8 @@ def seed_admin():
     """Legt den initialen Admin aus den Umgebungsvariablen an."""
     if db.one("SELECT id FROM users LIMIT 1"):
         return
+    if not ADMIN_PASSWORD.strip():
+        raise RuntimeError("ADMIN_PASSWORD must be set to create the initial admin user")
     db.execute(
         "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')",
         (ADMIN_USER, hash_password(ADMIN_PASSWORD)),

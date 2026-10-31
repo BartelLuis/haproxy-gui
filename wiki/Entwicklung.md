@@ -9,7 +9,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 $env:HG_DATA = "./data"         # Windows PowerShell
-$env:ADMIN_PASSWORD = "admin"
+$env:ADMIN_PASSWORD = "replace-with-a-strong-unique-password"
 uvicorn app.main:app --reload --port 8080
 ```
 

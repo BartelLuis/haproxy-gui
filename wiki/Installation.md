@@ -10,6 +10,7 @@
 Das Image wird bei jedem Push automatisch gebaut (amd64 + arm64).
 
 ```bash
+export ADMIN_PASSWORD='replace-with-a-strong-unique-password'
 docker compose up -d
 ```
 
@@ -18,7 +19,7 @@ oder ohne Compose:
 ```bash
 docker run -d --name haproxy-gui \
   -p 8080:8080 -p 80:80 -p 443:443 \
-  -e ADMIN_PASSWORD='sicheres-passwort' \
+  -e ADMIN_PASSWORD='replace-with-a-strong-unique-password' \
   -v haproxy-gui-data:/data \
   ghcr.io/bartelluis/haproxy-gui:latest
 ```
@@ -28,6 +29,7 @@ docker run -d --name haproxy-gui \
 ```bash
 git clone https://github.com/BartelLuis/haproxy-gui.git
 cd haproxy-gui
+export ADMIN_PASSWORD='replace-with-a-strong-unique-password'
 docker compose -f docker-compose.build.yml up -d --build
 ```
 
@@ -36,7 +38,7 @@ docker compose -f docker-compose.build.yml up -d --build
 | Variable | Standard | Beschreibung |
 |----------|----------|--------------|
 | `ADMIN_USER` | `admin` | Initialer Admin-Benutzer |
-| `ADMIN_PASSWORD` | `admin` | **Unbedingt ändern!** |
+| `ADMIN_PASSWORD` | – | Für die Ersteinrichtung erforderlich; starkes, individuelles Passwort verwenden |
 | `GUI_PORT` | `8080` | Port der Web-GUI |
 | `GUI_HOST` | leer | Listen-Host; leer bindet IPv4 und IPv6, `0.0.0.0` nur IPv4 |
 | `TRUSTED_PROXIES` | leer | Kommagetrennte Proxy-CIDRs, deren `X-Forwarded-For` vertraut wird |
@@ -54,10 +56,10 @@ docker compose -f docker-compose.build.yml up -d --build
 
 ## Erster Start
 
-1. Container starten
+1. `ADMIN_PASSWORD` setzen und Container starten
 2. GUI öffnen: `http://<host>:8080`
 3. Login: `admin` / Wert von `ADMIN_PASSWORD`
-4. **Sofort:** Passwort ändern (neuen Benutzer anlegen + MFA aktivieren) – siehe
+4. **Sofort:** MFA aktivieren – siehe
    [Sicherheit](Sicherheit)
 
 ## TLS für die GUI

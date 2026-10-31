@@ -23,7 +23,7 @@ eingebauten Schutzmechanismen und empfohlene Maßnahmen für den produktiven Bet
    Reverse-Proxy mit TLS (z. B. den eingebetteten HAProxy selbst, Caddy oder Nginx)
    oder nutze SSH-Port-Forwarding. Ohne TLS laufen Passwörter und Session-Tokens im
    Klartext.
-2. **ADMIN_PASSWORD setzen** und das Default-Passwort `admin` sofort ändern.
+2. **ADMIN_PASSWORD setzen**. Für eine neue Installation wird kein Standardpasswort akzeptiert.
 3. **MFA aktivieren** für alle Benutzer (siehe unten).
 4. **Kleinste Rechte:** Node-Verwaltung/Deploy ist `admin`-only; vergib `operator`/`viewer`
    für reine Lese-/Betriebsaufgaben.
