@@ -72,4 +72,6 @@ def rollback(vid: int, user=Depends(auth.require_auth)):
         note=f"Rollback auf Version {vid}",
     )
     audit(user["username"], "config.rollback", f"Version {vid} auf {node['name']}")
-    return result
+    if result.get("ok"):
+        return {"node": result.get("node"), "ok": True, "message": "Rollback erfolgreich"}
+    return {"node": result.get("node"), "ok": False, "message": "Rollback fehlgeschlagen"}
