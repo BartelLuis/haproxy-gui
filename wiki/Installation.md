@@ -38,6 +38,9 @@ docker compose -f docker-compose.build.yml up -d --build
 | `ADMIN_USER` | `admin` | Initialer Admin-Benutzer |
 | `ADMIN_PASSWORD` | `admin` | **Unbedingt ändern!** |
 | `GUI_PORT` | `8080` | Port der Web-GUI |
+| `GUI_HOST` | leer | Listen-Host; leer bindet IPv4 und IPv6, `0.0.0.0` nur IPv4 |
+| `TRUSTED_PROXIES` | leer | Kommagetrennte Proxy-CIDRs, deren `X-Forwarded-For` vertraut wird |
+| `ENABLE_API_DOCS` | `false` | Aktiviert die interaktive API-Dokumentation unter `/docs` |
 | `ENABLE_LOCAL_HAPROXY` | `true` | Eingebetteten HAProxy (Cluster „Local") starten |
 | `TOKEN_TTL_HOURS` | `12` | Gültigkeitsdauer von Session-Tokens |
 | `HG_DATA` | `/data` | Datenverzeichnis (DB, Zertifikate, Configs) |
@@ -70,3 +73,7 @@ docker compose up -d
 ```
 
 Alle Daten bleiben im Volume `haproxy-gui-data` erhalten.
+
+Das Compose-Netzwerk aktiviert IPv6; der Docker-Host muss dafür IPv6-Netzwerke
+und IPv6-Routing unterstützen. `TRUSTED_PROXIES` nur setzen, wenn die GUI hinter
+einem Reverse-Proxy läuft, und nur die tatsächlichen Proxy-Netze eintragen.

@@ -70,6 +70,8 @@ jobs:
           done
           curl -sf http://127.0.0.1:18080/ | grep -q HAProxy
           echo "GUI erreichbar"
+          curl -g -sf 'http://[::1]:18080/' | grep -q HAProxy
+          echo "GUI über IPv6 erreichbar"
 
       - name: Container-Smoke-Test (Login, API, Local-Cluster, HAProxy läuft)
         run: |

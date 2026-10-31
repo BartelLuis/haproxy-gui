@@ -1,4 +1,5 @@
 import json
+import ipaddress
 
 from .. import db as dbmod
 from . import validate as v
@@ -36,9 +37,16 @@ def generate_config(cluster, node=None):
     lines.append("    maxconn 4096")
     if node and node.get("socket_type") == "tcp":
         # Niemals auf * binden – der Socket hat keine Authentifizierung.
-        bind_addr = node.get("socket_host") or "127.0.0.1"
+        bind_addr = node.get("socket_host") or (
+            "127.0.0.1" if node.get("is_local") else node["host"]
+        )
+        try:
+            family = ipaddress.ip_address(bind_addr).version
+            prefix = f"ipv{family}@"
+        except ValueError:
+            prefix = ""
         lines.append(
-            f"    stats socket ipv4@{bind_addr}:{node.get('socket_port') or 9999} level operator"
+            f"    stats socket {prefix}{bind_addr}:{node.get('socket_port') or 9999} level operator"
         )
     else:
         sock = (node or {}).get("socket_path") or "/var/run/haproxy/admin.sock"
@@ -68,21 +76,64 @@ def generate_config(cluster, node=None):
 
     for fe in fe_list:
         v.clean_name(fe["name"], "Frontend-Name")
-        v.no_newline(fe["bind_ip"], "bind_ip")
+        bind_ip = v.clean_bind_ip(fe["bind_ip"], "bind_ip")
+        bind_family = fe.get("bind_family") or "ipv4"
+        if bind_family not in ("ipv4", "ipv6", "dual"):
+            raise ValueError(f"Frontend '{fe['name']}': ungültige Bind-Familie")
+        if bind_family == "dual" and bind_ip not in ("*", "::"):
+            raise ValueError(
+                f"Frontend '{fe['name']}': Dual-Stack-Binds benötigen '*'."
+            )
+        if bind_ip != "*":
+            try:
+                address_family = ipaddress.ip_address(bind_ip).version
+            except ValueError:
+                address_family = None
+            if bind_family == "ipv4" and address_family == 6:
+                raise ValueError(f"Frontend '{fe['name']}': IPv4-Bind mit IPv6-Adresse")
+            if bind_family == "ipv6" and address_family == 4:
+                raise ValueError(f"Frontend '{fe['name']}': IPv6-Bind mit IPv4-Adresse")
         lines.append(f"frontend {fe['name']}")
-        bind = f"    bind {fe['bind_ip']}:{fe['port']}"
+        bind_ips = (
+            [("*", False), ("::", True)]
+            if bind_family == "dual"
+            else [("::" if bind_family == "ipv6" and bind_ip == "*" else bind_ip,
+                   bind_family == "ipv6")]
+        )
+        cert = None
         if fe["use_ssl"]:
             cert = certs.get(fe["cert_id"])
             if not cert:
                 raise ValueError(
                     f"Frontend '{fe['name']}': kein Zertifikat zugeordnet"
                 )
-            bind += (
-                f" ssl crt {cert_dir}/{cert['name']}.crt"
-                " alpn h2,http1.1"
-            )
-        lines.append(bind)
+        for address, ipv6 in bind_ips:
+            bind = f"    bind {address}:{fe['port']}"
+            if ipv6:
+                bind += " v6only"
+            if cert:
+                bind += (
+                    f" ssl crt {cert_dir}/{cert['name']}.crt"
+                    " alpn h2,http1.1"
+                )
+            lines.append(bind)
         lines.append(f"    mode {fe['mode']}")
+        if fe.get("rate_limit_requests"):
+            requests_per_window = int(fe["rate_limit_requests"])
+            period = int(fe.get("rate_limit_period") or 10)
+            if (
+                fe["mode"] != "http"
+                or not 1 <= requests_per_window <= 100000
+                or not 1 <= period <= 3600
+            ):
+                raise ValueError(f"Frontend '{fe['name']}': ungültiges Rate-Limit")
+            lines += [
+                f"    stick-table type ip size 100k expire {max(30, period * 3)}s"
+                f" store http_req_rate({period}s)",
+                "    http-request track-sc0 src,ipmask(32,64)",
+                "    http-request deny deny_status 429 if"
+                f" {{ sc_http_req_rate(0) gt {requests_per_window} }}",
+            ]
         if fe["ssl_redirect"] and fe["use_ssl"] and fe["mode"] == "http":
             lines.append(
                 "    http-request redirect scheme https code 301 unless { ssl_fc }"

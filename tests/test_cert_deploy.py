@@ -105,7 +105,10 @@ def test_remote_deploy_preserves_split_files_and_updates_compatible_pem(
     ]
     assert case["remote_files"][pem_path] == CERT_BYTES + ISSUER_BYTES + KEY_BYTES
     assert events.index(("reload", case["node"]["id"])) > events.index(cert_writes[-1])
-    assert not any(event[0] == "run" and "rm " in event[1] for event in events)
+    assert not any(
+        event[0] == "run" and f"rm -f {case['node']['config_path']}.new" in event[1]
+        for event in events
+    )
     config_writes = [
         event for event in events if event[0] == "write" and event[1].endswith(".cfg.new")
     ]
@@ -161,6 +164,30 @@ def test_remote_configuration_upload_failure_prevents_activation(remote_certific
     assert [event[1] for event in case["events"] if event[0] == "run"] == [
         f"mkdir -p {CERT_DIR}"
     ]
+
+
+def test_remote_reload_failure_restores_previous_config(remote_certificate, monkeypatch):
+    case = remote_certificate
+    reload_results = iter([
+        (False, "new config reload failed"),
+        (True, "old config reload succeeded"),
+    ])
+
+    def reload_node(node):
+        case["events"].append(("reload", node["id"]))
+        return next(reload_results)
+
+    monkeypatch.setattr(case["deploy"], "reload_node", reload_node)
+    result = case["deploy"].deploy_node(case["cluster"], case["node"])
+
+    assert result["ok"] is False
+    assert "Reload fehlgeschlagen" in result["error"]
+    assert [event for event in case["events"] if event[0] == "reload"] == [
+        ("reload", case["node"]["id"]),
+        ("reload", case["node"]["id"]),
+    ]
+    assert any("cp -p" in event[1] for event in case["events"] if event[0] == "run")
+    assert any("Vorherige Config wiederhergestellt" in line for line in result["log"])
 
 
 @pytest.mark.parametrize("entrypoint", ["certificate", "configuration"])

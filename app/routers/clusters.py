@@ -42,6 +42,7 @@ class NodeIn(BaseModel):
 class DeployIn(BaseModel):
     validate_only: bool = False
     node_ids: list[int] = []
+    stop_on_failure: bool = True
 
 
 def node_public(node):
@@ -116,13 +117,13 @@ def _validate_node(body):
     """Validiert Node-Felder gegen Command-/Config-Injection."""
     try:
         v.clean_name(body.name, "Node-Name")
-        v.clean_host(body.host, "Host")
+        body.host = v.clean_host(body.host, "Host")
         v.clean_path(body.config_path, "config_path")
         v.clean_path(body.cert_dir, "cert_dir")
         if body.socket_path:
             v.clean_path(body.socket_path, "socket_path")
         if body.socket_host:
-            v.clean_host(body.socket_host, "socket_host")
+            body.socket_host = v.clean_host(body.socket_host, "socket_host")
         # reload_cmd ist bewusst frei (Root-Befehl) -> nur Admin darf es setzen;
         # hier nur Zeilenumbrüche verbieten
         v.no_newline(body.reload_cmd, "reload_cmd")
@@ -238,12 +239,14 @@ def deploy_cluster(cid: int, body: DeployIn, user=Depends(auth.require_auth)):
         nodes = dbmod.q("SELECT * FROM nodes WHERE cluster_id = ?", (cid,))
     if not nodes:
         raise HTTPException(400, "Cluster hat keine Nodes")
-    results = [
-        deploysvc.deploy_node(
-            cluster, n, body.validate_only, user=user["username"]
+    results = []
+    for node in nodes:
+        result = deploysvc.deploy_node(
+            cluster, node, body.validate_only, user=user["username"]
         )
-        for n in nodes
-    ]
+        results.append(result)
+        if not result["ok"] and body.stop_on_failure:
+            break
     ok_count = sum(1 for r in results if r["ok"])
     audit(
         user["username"],

@@ -48,6 +48,42 @@ def test_generate_full(env, cluster):
     assert "server web1 10.0.0.1:8080 check" in cfg
 
 
+def test_generate_dual_stack_frontend_binds(env, cluster):
+    db = env["db"]
+    db.execute(
+        "INSERT INTO frontends (cluster_id, name, port, bind_family)"
+        " VALUES (?, 'dual', 443, 'dual')",
+        (cluster["cluster"]["id"],),
+    )
+    cfg = configgen.generate_config(cluster["cluster"], cluster["node"])
+    assert "    bind *:443" in cfg
+    assert "    bind :::443 v6only" in cfg
+
+
+def test_generate_ipv6_aware_frontend_rate_limit(env, cluster):
+    env["db"].execute(
+        "INSERT INTO frontends (cluster_id, name, port, rate_limit_requests,"
+        " rate_limit_period) VALUES (?, 'limited', 443, 20, 10)",
+        (cluster["cluster"]["id"],),
+    )
+    cfg = configgen.generate_config(cluster["cluster"], cluster["node"])
+    assert "stick-table type ip size 100k expire 30s store http_req_rate(10s)" in cfg
+    assert "http-request track-sc0 src,ipmask(32,64)" in cfg
+    assert "http-request deny deny_status 429 if { sc_http_req_rate(0) gt 20 }" in cfg
+
+
+def test_generate_ipv6_stats_socket(env, cluster):
+    node = dict(cluster["node"], socket_type="tcp", socket_host="2001:db8::10")
+    cfg = configgen.generate_config(cluster["cluster"], node)
+    assert "stats socket ipv6@2001:db8::10:9999 level operator" in cfg
+
+
+def test_generate_remote_tcp_socket_defaults_to_node_address(env, cluster):
+    node = dict(cluster["node"], is_local=0, socket_type="tcp", socket_host="")
+    cfg = configgen.generate_config(cluster["cluster"], node)
+    assert f"stats socket ipv4@{node['host']}:9999 level operator" in cfg
+
+
 def test_generate_tcp_backend(env, cluster):
     db = env["db"]
     be_id = db.execute(

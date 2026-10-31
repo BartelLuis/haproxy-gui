@@ -1,3 +1,6 @@
+import ipaddress
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -14,17 +17,81 @@ class LoginIn(BaseModel):
     totp: str = ""
 
 
+def _trusted_proxy_networks():
+    return [
+        ipaddress.ip_network(item.strip(), strict=False)
+        for item in os.environ.get("TRUSTED_PROXIES", "").split(",")
+        if item.strip()
+    ]
+
+
+def _normalized_ip(value):
+    ip = ipaddress.ip_address(value)
+    return getattr(ip, "ipv4_mapped", None) or ip
+
+
+def _is_trusted_proxy(ip):
+    return any(ip in network for network in _trusted_proxy_networks())
+
+
 def _client_ip(request):
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    try:
+        peer_ip = _normalized_ip(peer)
+    except ValueError:
+        return peer
+
+    if not _is_trusted_proxy(peer_ip):
+        return str(peer_ip)
+
+    forwarded = request.headers.get("x-forwarded-for", "")
+    try:
+        chain = [ipaddress.ip_address(item.strip()) for item in forwarded.split(",")]
+        if not chain:
+            return str(peer_ip)
+    except ValueError:
+        return str(peer_ip)
+    chain.append(peer_ip)
+    for candidate in reversed(chain):
+        candidate = getattr(candidate, "ipv4_mapped", None) or candidate
+        if not _is_trusted_proxy(candidate):
+            return str(candidate)
+    return str(peer_ip)
+
+
+def _request_is_secure(request):
+    if request.url.scheme == "https":
+        return True
+    peer = request.client.host if request.client else ""
+    try:
+        peer_ip = _normalized_ip(peer)
+    except ValueError:
+        return False
+    return (
+        _is_trusted_proxy(peer_ip)
+        and request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+        == "https"
+    )
+
+
+def _rate_limit_key(client_ip, username):
+    try:
+        parsed_ip = _normalized_ip(client_ip)
+        network = ipaddress.ip_network(
+            f"{parsed_ip}/64" if parsed_ip.version == 6 else parsed_ip,
+            strict=False,
+        )
+        client_ip = str(network)
+    except ValueError:
+        pass
+    return f"{client_ip}|{username}"
 
 
 @router.post("/login")
 def login(body: LoginIn, request: Request, response: Response):
-    ip = _client_ip(request)
-    rate_key = f"{ip}|{body.username}"
+    client_ip = _client_ip(request)
+    rate_key = _rate_limit_key(client_ip, body.username)
+    ip = rate_key.rsplit("|", 1)[0]
     if not auth.login_rate_check(rate_key):
         audit(body.username, "login.locked", f"IP {ip}")
         raise HTTPException(429, "Zu viele Fehlversuche – bitte kurz warten")
@@ -54,7 +121,7 @@ def login(body: LoginIn, request: Request, response: Response):
     auth.login_succeeded(rate_key)
     token = auth.create_token(user)
     # Secure-Flag nur über HTTPS sinnvoll; bei lokalem HTTP würde der Browser es ablehnen.
-    secure = request.url.scheme == "https"
+    secure = _request_is_secure(request)
     response.set_cookie(
         "hg_token", token, httponly=True, samesite="lax",
         secure=secure, max_age=auth.TOKEN_TTL,

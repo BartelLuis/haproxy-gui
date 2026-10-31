@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS frontends (
     cluster_id INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     bind_ip TEXT DEFAULT '*',
+    bind_family TEXT NOT NULL DEFAULT 'ipv4',
     port INTEGER NOT NULL,
     mode TEXT DEFAULT 'http',
     use_ssl INTEGER DEFAULT 0,
@@ -86,6 +87,8 @@ CREATE TABLE IF NOT EXISTS frontends (
     acls TEXT DEFAULT '[]',
     rules TEXT DEFAULT '[]',
     extra TEXT DEFAULT '',
+    rate_limit_requests INTEGER NOT NULL DEFAULT 0,
+    rate_limit_period INTEGER NOT NULL DEFAULT 10,
     UNIQUE(cluster_id, name)
 );
 CREATE TABLE IF NOT EXISTS users (
@@ -143,12 +146,14 @@ CREATE TABLE IF NOT EXISTS keepalived (
     vip TEXT DEFAULT '',
     iface TEXT DEFAULT 'eth0',
     vr_id INTEGER DEFAULT 51,
-    auth_pass TEXT DEFAULT ''
+    auth_pass TEXT DEFAULT '',
+    track_haproxy INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS keepalived_nodes (
     node_id INTEGER PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
     state TEXT DEFAULT 'BACKUP',
-    priority INTEGER DEFAULT 100
+    priority INTEGER DEFAULT 100,
+    peer_ip TEXT DEFAULT ''
 );
 """
 
@@ -198,6 +203,37 @@ def execute(sql, args=()):
 def init_db():
     db = get_db()
     db.executescript(SCHEMA)
+    frontend_columns = {
+        row["name"] for row in db.execute("PRAGMA table_info(frontends)").fetchall()
+    }
+    if "bind_family" not in frontend_columns:
+        db.execute(
+            "ALTER TABLE frontends ADD COLUMN bind_family TEXT NOT NULL DEFAULT 'ipv4'"
+        )
+    if "rate_limit_requests" not in frontend_columns:
+        db.execute(
+            "ALTER TABLE frontends ADD COLUMN rate_limit_requests"
+            " INTEGER NOT NULL DEFAULT 0"
+        )
+    if "rate_limit_period" not in frontend_columns:
+        db.execute(
+            "ALTER TABLE frontends ADD COLUMN rate_limit_period"
+            " INTEGER NOT NULL DEFAULT 10"
+        )
+    keepalived_columns = {
+        row["name"] for row in db.execute("PRAGMA table_info(keepalived)").fetchall()
+    }
+    if "track_haproxy" not in keepalived_columns:
+        db.execute(
+            "ALTER TABLE keepalived ADD COLUMN track_haproxy INTEGER DEFAULT 0"
+        )
+    keepalived_node_columns = {
+        row["name"] for row in db.execute("PRAGMA table_info(keepalived_nodes)").fetchall()
+    }
+    if "peer_ip" not in keepalived_node_columns:
+        db.execute(
+            "ALTER TABLE keepalived_nodes ADD COLUMN peer_ip TEXT DEFAULT ''"
+        )
     db.commit()
     _seed_local()
 

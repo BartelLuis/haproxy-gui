@@ -17,10 +17,12 @@ def server(tmp_path_factory):
     env["ADMIN_USER"] = "admin"
     env["ADMIN_PASSWORD"] = "test123"
     env["APP_SECRET"] = "test-app-secret"
+    env["TRUSTED_PROXIES"] = ""
+    env["ENABLE_API_DOCS"] = ""
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app",
-         "--host", "127.0.0.1", "--port", "18180"],
+         "--host", "127.0.0.1", "--port", "18180", "--no-proxy-headers"],
         cwd=base, env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -62,6 +64,11 @@ def test_unauthenticated(server):
     assert requests.get(server + "/api/clusters").status_code == 401
 
 
+def test_api_docs_disabled_by_default(server):
+    assert requests.get(server + "/docs").status_code == 404
+    assert requests.get(server + "/openapi.json").status_code == 404
+
+
 def test_login_and_me(server):
     token = _login(server)
     me = requests.get(server + "/api/auth/me", headers=_h(token))
@@ -70,6 +77,26 @@ def test_login_and_me(server):
         server + "/api/auth/login", json={"username": "admin", "password": "falsch"}
     )
     assert bad.status_code == 401
+
+
+def test_login_rate_limit_ignores_untrusted_forwarded_for(server):
+    endpoint = server + "/api/auth/login"
+    username = "forwarded-for-check"
+    statuses = []
+    for index in range(5):
+        response = requests.post(
+            endpoint,
+            headers={"X-Forwarded-For": f"2001:db8:1::{index + 1}"},
+            json={"username": username, "password": "wrong"},
+        )
+        statuses.append(response.status_code)
+        assert response.status_code == 401
+    blocked = requests.post(
+        endpoint,
+        headers={"X-Forwarded-For": "198.51.100.10"},
+        json={"username": username, "password": "wrong"},
+    )
+    assert blocked.status_code == 429, statuses + [blocked.status_code]
 
 
 def test_seeded_local_cluster(server):
@@ -133,6 +160,86 @@ def test_crud_frontend_backend(server):
     assert "server s1 127.0.0.1:9000 check" in cfg.text
 
 
+def test_ipv6_node_and_dual_stack_frontend(server):
+    token = _login(server)
+    headers = _h(token)
+    clusters = requests.get(server + "/api/clusters", headers=headers).json()
+    cid = clusters[0]["id"]
+    node = requests.post(
+        server + "/api/nodes",
+        json={
+            "cluster_id": cid,
+            "name": "ipv6-node",
+            "host": "2001:db8::10",
+            "socket_type": "tcp",
+            "socket_host": "::1",
+        },
+        headers=headers,
+    )
+    assert node.status_code == 200, node.text
+    backend = requests.post(
+        server + "/api/backends",
+        json={
+            "cluster_id": cid,
+            "name": "ipv6-backend",
+            "servers": [
+                {"name": "v6-server", "host": "[2001:db8::20]", "port": 8080}
+            ],
+        },
+        headers=headers,
+    )
+    assert backend.status_code == 200, backend.text
+    frontend = requests.post(
+        server + "/api/frontends",
+        json={
+            "cluster_id": cid,
+            "name": "dual-http",
+            "port": 8081,
+            "bind_family": "dual",
+        },
+        headers=headers,
+    )
+    assert frontend.status_code == 200, frontend.text
+    cfg = requests.get(
+        server + f"/api/clusters/{cid}/config", headers=headers
+    ).text
+    assert "bind *:8081" in cfg
+    assert "bind :::8081 v6only" in cfg
+    assert "server v6-server 2001:db8::20:8080 check" in cfg
+
+
+def test_backend_update_rejects_invalid_server_host_without_mutation(server):
+    token = _login(server)
+    headers = _h(token)
+    cid = requests.get(server + "/api/clusters", headers=headers).json()[0]["id"]
+    created = requests.post(
+        server + "/api/backends",
+        json={
+            "cluster_id": cid,
+            "name": "validated-update",
+            "servers": [{"name": "good", "host": "127.0.0.1", "port": 8000}],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    bid = created.json()["id"]
+    updated = requests.put(
+        server + f"/api/backends/{bid}",
+        json={
+            "cluster_id": cid,
+            "name": "validated-update",
+            "servers": [{"name": "bad", "host": "bad host", "port": 8001}],
+        },
+        headers=headers,
+    )
+    assert updated.status_code == 400
+    stored = requests.get(
+        server + f"/api/backends?cluster_id={cid}", headers=headers
+    ).json()
+    backend = next(item for item in stored if item["id"] == bid)
+    assert backend["servers"][0]["host"] == "127.0.0.1"
+
+
 def test_versions_and_audit(server):
     token = _login(server)
     audit = requests.get(server + "/api/audit", headers=_h(token)).json()
@@ -178,6 +285,20 @@ def test_keepalived_endpoint(server):
     assert "config" in res.json() and "nodes" in res.json()
 
 
+def test_keepalived_rejects_auth_for_ipv6_only(server):
+    token = _login(server)
+    headers = _h(token)
+    clusters = requests.get(server + "/api/clusters", headers=headers).json()
+    cid = clusters[0]["id"]
+    res = requests.put(
+        server + f"/api/clusters/{cid}/keepalived",
+        json={"vip": "2001:db8::10/64", "auth_pass": "secret"},
+        headers=headers,
+    )
+    assert res.status_code == 400
+    assert "VRRPv3" in res.text
+
+
 def test_portscan(server):
     token = _login(server)
     res = requests.post(
@@ -186,6 +307,13 @@ def test_portscan(server):
         headers=_h(token),
     ).json()
     assert any(r["port"] == 18180 and r["open"] for r in res["results"])
+    ipv6 = requests.post(
+        server + "/api/tools/portscan",
+        json={"host": "[::1]", "ports": [18180]},
+        headers=_h(token),
+    )
+    assert ipv6.status_code == 200
+    assert ipv6.json()["host"] == "::1"
 
 
 def test_logs_endpoint(server):

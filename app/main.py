@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -27,7 +28,13 @@ from .services import certs as certsvc
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title="HAProxy GUI", docs_url=None, redoc_url=None, openapi_url=None)
+api_docs_enabled = os.environ.get("ENABLE_API_DOCS", "").lower() == "true"
+app = FastAPI(
+    title="HAProxy GUI",
+    docs_url="/docs" if api_docs_enabled else None,
+    redoc_url="/redoc" if api_docs_enabled else None,
+    openapi_url="/openapi.json" if api_docs_enabled else None,
+)
 
 app.include_router(auth_routes.router)
 for r in (users.router, alerts.router, ldaprouter.router):

@@ -17,7 +17,9 @@ services:
       ADMIN_USER: admin
       ADMIN_PASSWORD: change-me        # unbedingt ändern!
       ENABLE_LOCAL_HAPROXY: "true"     # eingebetteten HAProxy-Cluster "Local" aktivieren
+      # TRUSTED_PROXIES: "172.20.0.0/16,fd42::/64"  # Nur Proxy-Netze eintragen, die X-Forwarded-For setzen dürfen
       # GUI_PORT: "8080"
+      # GUI_HOST: "0.0.0.0"             # Standard "" bindet IPv4 und IPv6
       # SSH_TCP_MAXSEG: "1024"          # Linux-Standard für ausgehendes SSH; "0" deaktiviert die Begrenzung
       # Nach Änderungen mit aktualisiertem Image neu erstellen: docker compose up -d --force-recreate
     volumes:
@@ -25,3 +27,7 @@ services:
 
 volumes:
   haproxy-gui-data:
+
+networks:
+  default:
+    enable_ipv6: true
