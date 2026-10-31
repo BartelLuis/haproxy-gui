@@ -16,6 +16,7 @@ def server(tmp_path_factory):
     env["HG_DATA"] = str(data)
     env["ADMIN_USER"] = "admin"
     env["ADMIN_PASSWORD"] = "test123"
+    env["APP_SECRET"] = "test-app-secret"
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app",

@@ -17,12 +17,13 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("HG_DATA", str(data))
     monkeypatch.setenv("ADMIN_PASSWORD", "test123")
     monkeypatch.setenv("ADMIN_USER", "admin")
+    monkeypatch.setenv("APP_SECRET", "test-app-secret")
 
     import app.db as db
     import app.auth as auth
 
     importlib.reload(db)  # DATA_DIR/DB_PATH neu einlesen
-    auth._secret = None   # Secret pro Testumgebung neu aus der Datei lesen
+    auth._secret = None   # Secret pro Testumgebung neu einlesen
     importlib.reload(auth)
     db.init_db()
     auth.seed_admin()
