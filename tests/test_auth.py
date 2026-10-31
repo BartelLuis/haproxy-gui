@@ -20,6 +20,18 @@ def test_password_hash_roundtrip(env):
     assert not auth.verify_password("falsch", stored)
 
 
+def test_seed_admin_requires_password(env, monkeypatch):
+    auth, db = env["auth"], env["db"]
+    db.execute("DELETE FROM users")
+    monkeypatch.setattr(auth, "ADMIN_PASSWORD", "")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="ADMIN_PASSWORD must be set"):
+        auth.seed_admin()
+    assert db.one("SELECT id FROM users LIMIT 1") is None
+
+
 def test_viewer_user(env):
     db, auth = env["db"], env["auth"]
     db.execute(

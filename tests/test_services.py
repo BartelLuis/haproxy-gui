@@ -1,4 +1,5 @@
 import importlib
+import smtplib
 
 import pytest
 
@@ -121,6 +122,45 @@ def test_alert_settings_roundtrip(services):
     # Deaktiviert → Hinweis zurückgeben
     svc.save_settings({"enabled": False})
     assert svc.send("test") == ["Alerts sind deaktiviert"]
+
+
+def test_smtp_does_not_authenticate_when_starttls_fails(services, monkeypatch):
+    svc = services["alerting"]
+    svc.save_settings({
+        "enabled": True,
+        "smtp_host": "mail.example.test",
+        "smtp_user": "user",
+        "smtp_pass": "password",
+        "smtp_to": "alerts@example.test",
+    })
+
+    class SMTP:
+        authenticated = False
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def ehlo(self):
+            pass
+
+        def starttls(self):
+            raise smtplib.SMTPException("STARTTLS unavailable")
+
+        def login(self, *args):
+            self.authenticated = True
+
+        def send_message(self, *args):
+            raise AssertionError("Message must not be sent")
+
+    monkeypatch.setattr(svc.smtplib, "SMTP", SMTP)
+    assert svc.send("test") == ["SMTP: Versand fehlgeschlagen"]
+    assert not SMTP.authenticated
 
 
 def test_metrics_parser(services):
