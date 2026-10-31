@@ -138,5 +138,5 @@ def test_connection():
             conn.unbind()
             return True, "Verbindung und Bind erfolgreich"
         return False, f"Bind fehlgeschlagen: {conn.result.get('description', '?')}"
-    except Exception as exc:
-        return False, str(exc)
+    except Exception:
+        return False, "Verbindung fehlgeschlagen"
