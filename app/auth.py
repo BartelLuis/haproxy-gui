@@ -25,19 +25,10 @@ LOGIN_LOCKOUT = 300   # Sperrdauer in Sekunden
 def _get_secret():
     global _secret
     if _secret is None:
-        path = os.path.join(db.DATA_DIR, "secret.key")
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                _secret = f.read().strip()
-        else:
-            os.makedirs(db.DATA_DIR, exist_ok=True)
-            _secret = os.urandom(32).hex().encode()
-            with open(path, "wb") as f:
-                f.write(_secret)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+        secret = os.environ.get("APP_SECRET")
+        if not secret:
+            raise RuntimeError("APP_SECRET must be set")
+        _secret = secret.encode()
     return _secret
 
 
