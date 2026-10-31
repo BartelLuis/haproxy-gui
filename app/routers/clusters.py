@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,6 +13,7 @@ from ..services import validate as v
 from ..services.configgen import generate_config
 
 router = APIRouter(prefix="/api", tags=["clusters"])
+logger = logging.getLogger(__name__)
 
 
 class ClusterIn(BaseModel):
@@ -197,8 +199,9 @@ def test_node(nid: int):
             "version": info.get("Version", "?"),
             "uptime": info.get("Uptime", "?"),
         }
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+    except Exception:
+        logger.exception("Node test failed for node id %s", nid)
+        return {"ok": False, "error": "Interner Fehler beim Node-Test"}
 
 
 @router.get("/clusters/{cid}/config", response_class=PlainTextResponse)
