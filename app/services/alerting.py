@@ -91,8 +91,8 @@ def send(message):
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req, timeout=10)
-        except Exception as exc:
-            errors.append(f"Webhook: {exc}")
+        except Exception:
+            errors.append("Webhook: Versand fehlgeschlagen")
     if st.get("smtp_host") and st.get("smtp_to"):
         try:
             msg = EmailMessage()
@@ -109,8 +109,8 @@ def send(message):
                 if st.get("smtp_user"):
                     smtp.login(st["smtp_user"], st.get("smtp_pass") or "")
                 smtp.send_message(msg)
-        except Exception as exc:
-            errors.append(f"SMTP: {exc}")
+        except Exception:
+            errors.append("SMTP: Versand fehlgeschlagen")
     return errors
 
 
