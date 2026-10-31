@@ -139,7 +139,11 @@ def test_remote_upload_failure_prevents_reload(
     result = _deploy(case, entrypoint)
 
     assert result["ok"] is False
-    assert "Upload interrupted" in result["error"]
+    if entrypoint == "certificate":
+        assert result["error"] == "Interner Fehler bei der Bereitstellung"
+        assert "Upload interrupted" not in str(result)
+    else:
+        assert "Upload interrupted" in result["error"]
     assert not any(event[0] == "reload" for event in case["events"])
     assert case["remote_files"][f"{CERT_DIR}/{CERT_NAME}.pem"] == b"old certificate and key"
     commands = [event[1] for event in case["events"] if event[0] == "run"]
@@ -204,7 +208,11 @@ def test_remote_mkdir_failure_prevents_upload_and_reload(
     result = _deploy(case, entrypoint)
 
     assert result["ok"] is False
-    assert "Permission denied" in result["error"]
+    if entrypoint == "certificate":
+        assert result["error"] == "Interner Fehler bei der Bereitstellung"
+        assert "Permission denied" not in str(result)
+    else:
+        assert "Permission denied" in result["error"]
     assert case["events"] == [("run", f"mkdir -p {CERT_DIR}")]
 
 
