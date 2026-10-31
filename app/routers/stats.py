@@ -93,8 +93,8 @@ def list_tables(nid: int):
         raise HTTPException(404, "Node nicht gefunden")
     try:
         return {"ok": True, "tables": _parse_tables(runtimesvc.runtime_cmd(node, "show table"))}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc), "tables": []}
+    except Exception:
+        return {"ok": False, "error": "Interner Fehler beim Abrufen der Tabellen", "tables": []}
 
 
 class TableIn(BaseModel):
