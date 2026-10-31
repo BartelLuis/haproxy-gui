@@ -1,5 +1,6 @@
 import difflib
 import ipaddress
+import logging
 import socket
 from concurrent.futures import ThreadPoolExecutor
 
@@ -11,6 +12,7 @@ from ..services import metrics as metricsvc
 from ..services.configgen import generate_config
 
 router = APIRouter(prefix="/api", tags=["tools"])
+logger = logging.getLogger(__name__)
 
 DEFAULT_PORTS = [
     21, 22, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995,
@@ -83,4 +85,5 @@ def node_metrics(nid: int, user=Depends(auth.require_auth)):
     try:
         return {"ok": True, "metrics": metricsvc.get_metrics(node)}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        logger.exception("Failed to fetch metrics for node %s", nid)
+        return {"ok": False, "error": "Interner Fehler beim Abrufen der Metriken"}
