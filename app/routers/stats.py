@@ -157,8 +157,8 @@ def map_entries(nid: int, map_id: str):
             parts = line.split(None, 1)
             entries.append({"key": parts[0], "value": parts[1] if len(parts) > 1 else ""})
         return {"ok": True, "entries": entries}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc), "entries": []}
+    except Exception:
+        return {"ok": False, "error": "Interner Fehler beim Auslesen der Map-Einträge", "entries": []}
 
 
 class MapEntryIn(BaseModel):
