@@ -58,6 +58,7 @@ jobs:
           docker run -d --name hg \
             -p 18080:8080 \
             -e ADMIN_PASSWORD=ci-test-password \
+            -e APP_SECRET=ci-test-secret \
             -e ENABLE_LOCAL_HAPROXY=true \
             haproxy-gui:test
           echo "Warte auf Server..."
