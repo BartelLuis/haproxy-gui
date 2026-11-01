@@ -1,4 +1,5 @@
 import importlib
+import ipaddress
 import json
 import smtplib
 from datetime import datetime, timezone
@@ -407,6 +408,11 @@ def acme(env):
     ("2620:FE:0:0:0:0:0:FE", "[2620:fe::fe]:53"),
     ("[2620:fe::fe]", "[2620:fe::fe]:53"),
     ("[2620:fe::fe]:5353", "[2620:fe::fe]:5353"),
+    ("[2620:fe::fe]:1", "[2620:fe::fe]:1"),
+    ("[2620:fe::fe]:65535", "[2620:fe::fe]:65535"),
+    ("[2620:fe::fe]:00053", "[2620:fe::fe]:53"),
+    ("9.9.9.9:00053", "9.9.9.9:53"),
+    ("[::ffff:192.0.2.53]:5353", f"[{ipaddress.IPv6Address('::ffff:192.0.2.53')}]:5353"),
 ])
 def test_dns_resolver_validation(value, expected):
     from app.services import validate
@@ -419,6 +425,11 @@ def test_dns_resolver_validation(value, expected):
     ["999.9.9.9"], ["https://9.9.9.9"], ["9.9.9.9:0"],
     ["9.9.9.9:65536"], ["9.9.9.9:"], ["9.9.9.9:abc"],
     ["[2620:fe::fe"], ["[9.9.9.9]:53"], ["[2620:fe::fe]:0"],
+    ["[]"], ["[[2620:fe::fe]]"], ["[2620:fe::fe]]:53"],
+    ["[2620:fe::fe]53"], ["[2620:fe::fe]extra"], ["[2620:fe::fe]:"],
+    ["[2620:fe::fe]:53:53"], ["[2620:fe::fe]:65536"],
+    ["[2620:fe::fe]:+53"], ["[2620:fe::fe]:5 3"],
+    ["[2620:fe::fe]:\u0665\u0663"], ["9.9.9.9:\uff15\uff13"],
     ["[fe80::1%eth0]:53"], ["9.9.9.9;touch /tmp/x"], ["--dns.disable-cp"],
 ])
 def test_dns_resolver_validation_rejects_invalid_values(values):
@@ -426,6 +437,15 @@ def test_dns_resolver_validation_rejects_invalid_values(values):
 
     with pytest.raises(ValueError, match="DNS-Server"):
         validate.clean_dns_resolvers(values)
+
+
+@pytest.mark.parametrize("suffix", ["", "]", "]:53"])
+def test_dns_resolver_rejects_long_bracket_input(suffix):
+    from app.services import validate
+
+    resolver = "[" + "[\\" * 50_000 + suffix
+    with pytest.raises(ValueError, match="DNS-Server"):
+        validate.clean_dns_resolvers([resolver])
 
 
 def test_acme_settings_defaults_and_persistence(env, acme):
