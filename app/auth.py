@@ -3,6 +3,8 @@ import binascii
 import hashlib
 import hmac
 import os
+import secrets
+import tempfile
 import time
 
 from fastapi import Depends, HTTPException, Request
@@ -22,12 +24,40 @@ LOGIN_MAX = 5         # max. Fehlversuche pro Fenster
 LOGIN_LOCKOUT = 300   # Sperrdauer in Sekunden
 
 
+def _load_or_create_secret():
+    data_dir = os.environ.get("HG_DATA", "/data")
+    os.makedirs(data_dir, exist_ok=True)
+    secret_path = os.path.join(data_dir, "app_secret")
+
+    try:
+        with open(secret_path, "rb") as secret_file:
+            secret = secret_file.read()
+    except FileNotFoundError:
+        fd, temp_path = tempfile.mkstemp(prefix=".app_secret.", dir=data_dir)
+        try:
+            with os.fdopen(fd, "wb") as secret_file:
+                secret_file.write(secrets.token_urlsafe(32).encode())
+                secret_file.flush()
+                os.fsync(secret_file.fileno())
+            try:
+                os.link(temp_path, secret_path)
+            except FileExistsError:
+                pass
+        finally:
+            os.unlink(temp_path)
+        with open(secret_path, "rb") as secret_file:
+            secret = secret_file.read()
+
+    if not secret:
+        raise RuntimeError(f"Application secret file is empty: {secret_path}")
+    os.chmod(secret_path, 0o600)
+    return secret.decode()
+
+
 def _get_secret():
     global _secret
     if _secret is None:
-        secret = os.environ.get("APP_SECRET")
-        if not secret:
-            raise RuntimeError("APP_SECRET must be set")
+        secret = os.environ.get("APP_SECRET") or _load_or_create_secret()
         _secret = secret.encode()
     return _secret
 

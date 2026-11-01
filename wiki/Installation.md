@@ -39,6 +39,7 @@ docker compose -f docker-compose.build.yml up -d --build
 |----------|----------|--------------|
 | `ADMIN_USER` | `admin` | Initialer Admin-Benutzer |
 | `ADMIN_PASSWORD` | – | Für die Ersteinrichtung erforderlich; starkes, individuelles Passwort verwenden |
+| `APP_SECRET` | automatisch | Optionaler Schlüssel für Sessions und verschlüsselte Secrets; ohne Angabe dauerhaft unter `HG_DATA/app_secret` gespeichert |
 | `GUI_PORT` | `8080` | Port der Web-GUI |
 | `GUI_HOST` | leer | Listen-Host; leer bindet IPv4 und IPv6, `0.0.0.0` nur IPv4 |
 | `TRUSTED_PROXIES` | leer | Kommagetrennte Proxy-CIDRs, deren `X-Forwarded-For` vertraut wird |
@@ -46,6 +47,10 @@ docker compose -f docker-compose.build.yml up -d --build
 | `ENABLE_LOCAL_HAPROXY` | `true` | Eingebetteten HAProxy (Cluster „Local") starten |
 | `TOKEN_TTL_HOURS` | `12` | Gültigkeitsdauer von Session-Tokens |
 | `HG_DATA` | `/data` | Datenverzeichnis (DB, Zertifikate, Configs) |
+
+Das Datenverzeichnis enthält auch den automatisch erzeugten Anwendungsschlüssel.
+Das Volume muss erhalten und gesichert werden, da der Schlüssel zum Entschlüsseln
+gespeicherter Zugangsdaten benötigt wird.
 
 ## Ports
 

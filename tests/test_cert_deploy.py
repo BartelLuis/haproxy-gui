@@ -139,11 +139,13 @@ def test_remote_upload_failure_prevents_reload(
     result = _deploy(case, entrypoint)
 
     assert result["ok"] is False
-    if entrypoint == "certificate":
-        assert result["error"] == "Interner Fehler bei der Bereitstellung"
-        assert "Upload interrupted" not in str(result)
-    else:
-        assert "Upload interrupted" in result["error"]
+    expected_error = (
+        "Interner Fehler bei der Bereitstellung"
+        if entrypoint == "certificate"
+        else "Deployment fehlgeschlagen"
+    )
+    assert result["error"] == expected_error
+    assert "Upload interrupted" not in str(result)
     assert not any(event[0] == "reload" for event in case["events"])
     assert case["remote_files"][f"{CERT_DIR}/{CERT_NAME}.pem"] == b"old certificate and key"
     commands = [event[1] for event in case["events"] if event[0] == "run"]
@@ -163,7 +165,7 @@ def test_remote_configuration_upload_failure_prevents_activation(remote_certific
     result = _deploy(case, "configuration")
 
     assert result["ok"] is False
-    assert "Configuration upload interrupted" in result["error"]
+    assert result["error"] == "Deployment fehlgeschlagen"
     assert not any(event[0] == "reload" for event in case["events"])
     assert [event[1] for event in case["events"] if event[0] == "run"] == [
         f"mkdir -p {CERT_DIR}"
@@ -208,11 +210,13 @@ def test_remote_mkdir_failure_prevents_upload_and_reload(
     result = _deploy(case, entrypoint)
 
     assert result["ok"] is False
-    if entrypoint == "certificate":
-        assert result["error"] == "Interner Fehler bei der Bereitstellung"
-        assert "Permission denied" not in str(result)
-    else:
-        assert "Permission denied" in result["error"]
+    expected_error = (
+        "Interner Fehler bei der Bereitstellung"
+        if entrypoint == "certificate"
+        else "Deployment fehlgeschlagen"
+    )
+    assert result["error"] == expected_error
+    assert "Permission denied" not in str(result)
     assert case["events"] == [("run", f"mkdir -p {CERT_DIR}")]
 
 
