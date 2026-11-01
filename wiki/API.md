@@ -44,6 +44,8 @@ Alle Endpunkte unter `/api`. Authentifizierung per `Authorization: Bearer hg_<to
 
 `dns_resolvers` ist eine Liste von IPv4-/IPv6-Adressen mit optionalem Port,
 z. B. `{"dns_resolvers": ["9.9.9.9", "1.1.1.1", "[2620:fe::fe]:53"]}`.
+IPv6 mit Port muss als `[Adresse]:Port` angegeben werden; ohne Port sind die
+Klammern optional. Ports bestehen nur aus ASCII-Ziffern und liegen zwischen 1 und 65535.
 Ohne gespeicherte Einstellung gelten `9.9.9.9:53` und `1.1.1.1:53`.
 Die API ergänzt Port `53`, normalisiert IP-Adressen und entfernt doppelte Einträge.
 Eine leere Liste nutzt wieder die Standard-Resolver von lego. Änderungen werden

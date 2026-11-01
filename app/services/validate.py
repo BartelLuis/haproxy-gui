@@ -60,15 +60,16 @@ def clean_dns_resolvers(values: list[str]) -> list[str]:
         host, port = resolver, "53"
         try:
             if resolver.startswith("["):
-                match = re.fullmatch(r"\[([^\]]+)\](?::([0-9]+))?", resolver)
-                if not match:
+                host, closing, suffix = resolver[1:].partition("]")
+                if not closing or ":" not in host:
                     raise ValueError
-                host, port = match[1], match[2] or "53"
-                if ":" not in host:
-                    raise ValueError
+                if suffix:
+                    if not suffix.startswith(":"):
+                        raise ValueError
+                    port = suffix[1:]
             elif resolver.count(":") == 1:
                 host, port = resolver.split(":")
-            if "%" in host or not re.fullmatch(r"[0-9]+", port):
+            if "%" in host or not port.isascii() or not port.isdecimal():
                 raise ValueError
             address = ipaddress.ip_address(host)
             port_number = int(port)

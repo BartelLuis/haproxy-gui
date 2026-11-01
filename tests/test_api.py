@@ -372,6 +372,13 @@ def test_acme_settings_writable_only_by_admin(server, role):
     ({"dns_resolvers": ["invalid"]}, 400),
     ({"dns_resolvers": ["9.9.9.9:65536"]}, 400),
     ({"dns_resolvers": ["9.9.9.9", "1.1.1.1:0"]}, 400),
+    ({"dns_resolvers": ["[2620:fe::fe]:"]}, 400),
+    ({"dns_resolvers": ["[2620:fe::fe]extra"]}, 400),
+    pytest.param(
+        {"dns_resolvers": ["9.9.9.9", "[" + "[\\" * 50_000]},
+        400,
+        id="long-bracketed-resolver",
+    ),
     ({"dns_resolvers": "9.9.9.9"}, 422),
     ({"dns_resolvers": [53]}, 422),
     ({}, 422),
@@ -380,7 +387,7 @@ def test_acme_settings_reject_invalid_input_without_saving(server, payload, stat
     headers = _h(_login(server))
     url = server + "/api/acme/settings"
     original = requests.get(url, headers=headers).json()
-    response = requests.put(url, json=payload, headers=headers)
+    response = requests.put(url, json=payload, headers=headers, timeout=5)
     assert response.status_code == status, response.text
     assert response.json()["detail"]
     assert requests.get(url, headers=headers).json() == original
