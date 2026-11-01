@@ -136,6 +136,7 @@ Damit lassen sich mehrere Backends mit unterschiedlichen URLs ohne manuelle ACLs
 | ----------------------- | -------- | ---------------------------------------------- |
 | `ADMIN_USER`            | `admin`  | Initialer Admin-Benutzer (weitere in der GUI)   |
 | `ADMIN_PASSWORD`        | –        | Erforderlich für die Ersteinrichtung; muss ein starkes, individuelles Passwort sein |
+| `APP_SECRET`            | automatisch | Optionaler Schlüssel für Sessions und verschlüsselte Secrets; ohne Angabe wird er dauerhaft unter `HG_DATA/app_secret` gespeichert |
 | `GUI_PORT`              | `8080`   | Port des Web-Interfaces                         |
 | `GUI_HOST`              | `""`     | Listen-Host; leer bindet IPv4 und IPv6, `0.0.0.0` nur IPv4 |
 | `TRUSTED_PROXIES`       | leer     | Kommagetrennte Proxy-CIDRs, deren `X-Forwarded-For` vertraut wird |
@@ -306,5 +307,7 @@ Für Zertifikats-Ausstellung muss `lego` im `PATH` liegen (unter Windows z. B. a
 
 - `ADMIN_PASSWORD` ändern und die GUI nicht ungeschützt ins Internet stellen
   (z. B. hinter ein eigenes TLS-Frontend legen)
+- Das `/data`-Volume sichern und nicht löschen: Es enthält auch den automatisch
+  generierten Anwendungsschlüssel für Sessions und verschlüsselte Secrets.
 - SSH-Keys und DNS-Credentials liegen in `/data/haproxy-gui.db` – Volume schützen
 - Der TCP-Stats-Socket hat keine Authentifizierung – nur an interne/localhost-Adressen binden
