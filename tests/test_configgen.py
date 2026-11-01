@@ -1,3 +1,5 @@
+import pytest
+
 from app.services import configgen
 
 
@@ -130,6 +132,86 @@ def test_ssl_frontend_uses_separate_certificate_and_key(env, cluster):
     assert "ssl-load-extra-del-ext" in cfg.split("defaults\n", 1)[0]
     assert "bind *:443 ssl crt /etc/haproxy/certs/example.com.crt alpn h2,http1.1" in cfg
     assert "ssl-key-file" not in cfg
+
+
+def _make_ssl_server(env, cluster, host, ssl_verify, check):
+    be_id = env["db"].execute(
+        "INSERT INTO backends (cluster_id, name) VALUES (?, 'secure')",
+        (cluster["cluster"]["id"],),
+    )
+    env["db"].execute(
+        'INSERT INTO servers (backend_id, name, host, port, "check", ssl, ssl_verify)'
+        " VALUES (?, 'app1', ?, 443, ?, 1, ?)",
+        (be_id, host, check, ssl_verify),
+    )
+
+
+@pytest.mark.parametrize(("host", "ssl_verify", "check", "expected"), [
+    ("10.0.0.5", 0, 1, "server app1 10.0.0.5:443 check ssl verify none check-ssl"),
+    ("10.0.0.5", 0, 0, "server app1 10.0.0.5:443 ssl verify none"),
+    (
+        "app.example.com", 1, 1,
+        "server app1 app.example.com:443 check ssl verify required ca-file @system-ca"
+        " sni str(app.example.com) verifyhost app.example.com"
+        " check-ssl check-sni app.example.com",
+    ),
+    (
+        "app.example.com", 1, 0,
+        "server app1 app.example.com:443 ssl verify required ca-file @system-ca"
+        " sni str(app.example.com) verifyhost app.example.com",
+    ),
+])
+def test_ssl_backend_server_sets_explicit_verification(
+    env, cluster, host, ssl_verify, check, expected
+):
+    _make_ssl_server(env, cluster, host, ssl_verify, check)
+    cfg = configgen.generate_config(cluster["cluster"], cluster["node"])
+    assert f"\n    {expected}\n" in cfg
+
+
+@pytest.mark.parametrize("host", ["10.0.0.5", "2001:db8::5"])
+def test_ssl_backend_verification_rejects_ip_host(env, cluster, host):
+    _make_ssl_server(env, cluster, host, 1, 1)
+    with pytest.raises(ValueError, match="Hostnamen"):
+        configgen.generate_config(cluster["cluster"], cluster["node"])
+
+
+def test_init_db_migrates_existing_ssl_servers_to_verify_none(env, cluster):
+    db = env["db"]
+    conn = db.get_db()
+    conn.executescript(
+        """
+        DROP TABLE servers;
+        CREATE TABLE servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            backend_id INTEGER NOT NULL REFERENCES backends(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            "check" INTEGER DEFAULT 1,
+            ssl INTEGER DEFAULT 0,
+            weight INTEGER DEFAULT 100,
+            maxconn INTEGER DEFAULT 0,
+            backup INTEGER DEFAULT 0,
+            UNIQUE(backend_id, name)
+        );
+        """
+    )
+    be_id = db.execute(
+        "INSERT INTO backends (cluster_id, name) VALUES (?, 'legacy')",
+        (cluster["cluster"]["id"],),
+    )
+    db.execute(
+        "INSERT INTO servers (backend_id, name, host, port, ssl)"
+        " VALUES (?, 'old', '10.0.0.6', 443, 1)",
+        (be_id,),
+    )
+
+    db.init_db()
+
+    assert db.one("SELECT ssl_verify FROM servers WHERE name = 'old'") == {"ssl_verify": 0}
+    cfg = configgen.generate_config(cluster["cluster"], cluster["node"])
+    assert "\n    server old 10.0.0.6:443 check ssl verify none check-ssl\n" in cfg
 
 
 def test_generate_route_rules(env, cluster):

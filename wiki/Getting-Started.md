@@ -23,6 +23,7 @@ Um einen **externen** Server einzubinden: siehe **[Host anlegen](Host-anlegen)**
 1. **Backends** → **+ Neues Backend**
 2. Name: `web`, Mode: `http`, Balance: `roundrobin`
 3. Server hinzufügen: `web1  10.0.0.1  8080` (Haken bei „Check")
+   – für HTTPS-Backends zusätzlich „SSL“, optional „Zert. prüfen“ (Host als DNS-Name, HAProxy ≥ 2.6)
 4. Speichern
 
 ## 4. Frontend anlegen

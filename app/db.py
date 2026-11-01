@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS servers (
     port INTEGER NOT NULL,
     "check" INTEGER DEFAULT 1,
     ssl INTEGER DEFAULT 0,
+    ssl_verify INTEGER DEFAULT 0,
     weight INTEGER DEFAULT 100,
     maxconn INTEGER DEFAULT 0,
     backup INTEGER DEFAULT 0,
@@ -220,6 +221,11 @@ def init_db():
             "ALTER TABLE frontends ADD COLUMN rate_limit_period"
             " INTEGER NOT NULL DEFAULT 10"
         )
+    server_columns = {
+        row["name"] for row in db.execute("PRAGMA table_info(servers)").fetchall()
+    }
+    if "ssl_verify" not in server_columns:
+        db.execute("ALTER TABLE servers ADD COLUMN ssl_verify INTEGER DEFAULT 0")
     keepalived_columns = {
         row["name"] for row in db.execute("PRAGMA table_info(keepalived)").fetchall()
     }

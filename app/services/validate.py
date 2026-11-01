@@ -40,6 +40,17 @@ def clean_bind_ip(v, f="Bind-IP"):
     return clean_host(value, f)
 
 
+def require_tls_hostname(host, f="Server"):
+    """HAProxy prüft Zertifikatsnamen nur gegen DNS-Namen, nicht gegen IP-Adressen."""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    raise ValueError(
+        f"{f}: Zertifikatsprüfung benötigt einen Hostnamen statt der IP-Adresse {host}"
+    )
+
+
 def clean_dns_resolvers(values: list[str]) -> list[str]:
     if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
         raise ValueError("DNS-Server müssen als Liste von IP-Adressen angegeben werden")

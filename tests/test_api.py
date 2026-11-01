@@ -240,6 +240,64 @@ def test_backend_update_rejects_invalid_server_host_without_mutation(server):
     assert backend["servers"][0]["host"] == "127.0.0.1"
 
 
+def test_backend_ssl_verification_roundtrip_and_validation(server):
+    headers = _h(_login(server))
+    cid = requests.get(server + "/api/clusters", headers=headers).json()[0]["id"]
+
+    def backend_body(servers):
+        return {"cluster_id": cid, "name": "tls-backend", "servers": servers}
+
+    rejected = requests.post(
+        server + "/api/backends",
+        json=backend_body([{"name": "tls-ip", "host": "10.0.0.7", "port": 443,
+                            "ssl": True, "ssl_verify": True}]),
+        headers=headers,
+    )
+    assert rejected.status_code == 400
+    assert "Hostnamen" in rejected.json()["detail"]
+    stored = requests.get(server + f"/api/backends?cluster_id={cid}", headers=headers).json()
+    assert all(item["name"] != "tls-backend" for item in stored)
+
+    created = requests.post(
+        server + "/api/backends",
+        json=backend_body([
+            {"name": "tls-host", "host": "app.example.com", "port": 443,
+             "ssl": True, "ssl_verify": True},
+            {"name": "tls-plain", "host": "10.0.0.8", "port": 443, "ssl": True},
+            {"name": "no-tls", "host": "10.0.0.9", "port": 80, "ssl_verify": True},
+        ]),
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    bid = created.json()["id"]
+    stored = requests.get(server + f"/api/backends?cluster_id={cid}", headers=headers).json()
+    servers = {s["name"]: s for s in next(b for b in stored if b["id"] == bid)["servers"]}
+    assert {name: (s["ssl"], s["ssl_verify"]) for name, s in servers.items()} == {
+        "tls-host": (1, 1), "tls-plain": (1, 0), "no-tls": (0, 0),
+    }
+    cfg = requests.get(server + f"/api/clusters/{cid}/config", headers=headers).text
+    assert (
+        "server tls-host app.example.com:443 check ssl verify required"
+        " ca-file @system-ca sni str(app.example.com) verifyhost app.example.com"
+        " check-ssl check-sni app.example.com"
+    ) in cfg
+    assert "server tls-plain 10.0.0.8:443 check ssl verify none check-ssl" in cfg
+    assert "server no-tls 10.0.0.9:80 check\n" in cfg
+
+    updated = requests.put(
+        server + f"/api/backends/{bid}",
+        json=backend_body([{"name": "tls-ip", "host": "10.0.0.7", "port": 443,
+                            "ssl": True, "ssl_verify": True}]),
+        headers=headers,
+    )
+    assert updated.status_code == 400
+    stored = requests.get(server + f"/api/backends?cluster_id={cid}", headers=headers).json()
+    assert {s["name"] for s in next(b for b in stored if b["id"] == bid)["servers"]} == {
+        "tls-host", "tls-plain", "no-tls",
+    }
+    assert requests.delete(server + f"/api/backends/{bid}", headers=headers).status_code == 200
+
+
 def test_versions_and_audit(server):
     token = _login(server)
     audit = requests.get(server + "/api/audit", headers=_h(token)).json()

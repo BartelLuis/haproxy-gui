@@ -27,7 +27,7 @@ Alle Endpunkte unter `/api`. Authentifizierung per `Authorization: Bearer hg_<to
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
 | GET/POST/PUT/DELETE | `/api/frontends[/{id}]` | Frontends (Binds, SSL, ACLs, Regeln) |
-| GET/POST/PUT/DELETE | `/api/backends[/{id}]` | Backends inkl. Server |
+| GET/POST/PUT/DELETE | `/api/backends[/{id}]` | Backends inkl. Server (`ssl`, `ssl_verify`: CA- und Hostname-Prüfung, nur mit `ssl` und DNS-Hostname) |
 
 ## Zertifikate
 
