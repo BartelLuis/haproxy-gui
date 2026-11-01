@@ -1,4 +1,6 @@
 import hashlib
+import os
+import stat
 
 
 def test_admin_login_and_token(env):
@@ -18,6 +20,19 @@ def test_password_hash_roundtrip(env):
     assert stored.startswith("pbkdf2$")
     assert auth.verify_password("geheim42", stored)
     assert not auth.verify_password("falsch", stored)
+
+
+def test_app_secret_is_persisted_when_not_configured(env, monkeypatch):
+    auth, data = env["auth"], env["data"]
+    monkeypatch.delenv("APP_SECRET")
+
+    secret = auth._get_secret()
+    secret_path = data / "app_secret"
+
+    assert secret_path.read_bytes() == secret
+    assert stat.S_IMODE(os.stat(secret_path).st_mode) == 0o600
+    auth._secret = None
+    assert auth._get_secret() == secret
 
 
 def test_seed_admin_requires_password(env, monkeypatch):
