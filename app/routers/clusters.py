@@ -256,4 +256,11 @@ def deploy_cluster(cid: int, body: DeployIn, user=Depends(auth.require_auth)):
         "cluster.deploy" if not body.validate_only else "cluster.validate",
         f"{cluster['name']}: {ok_count}/{len(results)} Nodes OK",
     )
-    return {"results": results}
+    safe_results = []
+    for r in results:
+        item = dict(r)
+        if not item.get("ok"):
+            item["error"] = "Deployment fehlgeschlagen"
+            item["log"] = []
+        safe_results.append(item)
+    return {"results": safe_results}

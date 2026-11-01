@@ -114,8 +114,8 @@ def _rollback_local(path, node, log):
         success, message = reload_node(node)
         log.append("Vorherige Config wiederhergestellt; " + message)
         return success
-    except OSError as exc:
-        log.append(f"Rollback fehlgeschlagen: {exc}")
+    except OSError:
+        log.append("Rollback fehlgeschlagen")
         return False
 
 
@@ -246,8 +246,8 @@ def deploy_node(cluster, node, validate_only=False, content=None,
                 f"Node online – HAProxy {info.get('Version', '?')}, "
                 f"Uptime {info.get('Uptime', '?')}"
             )
-        except Exception as exc:
-            log.append(f"Runtime-Check fehlgeschlagen: {exc}")
+        except Exception:
+            log.append("Runtime-Check fehlgeschlagen")
         return ok()
-    except Exception as exc:
-        return fail(str(exc))
+    except Exception:
+        return fail("Deployment fehlgeschlagen")
