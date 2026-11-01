@@ -16,6 +16,7 @@ class ServerIn(BaseModel):
     port: int
     check: bool = True
     ssl: bool = False
+    ssl_verify: bool = False
     weight: int = 100
     maxconn: int = 0
     backup: bool = False
@@ -35,11 +36,11 @@ class BackendIn(BaseModel):
 def _insert_servers(backend_id, servers):
     for s in servers:
         dbmod.execute(
-            'INSERT INTO servers (backend_id, name, host, port, "check", ssl, weight,'
-            " maxconn, backup) VALUES (?,?,?,?,?,?,?,?,?)",
+            'INSERT INTO servers (backend_id, name, host, port, "check", ssl, ssl_verify,'
+            " weight, maxconn, backup) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 backend_id, s.name, s.host, s.port, int(s.check), int(s.ssl),
-                s.weight, s.maxconn, int(s.backup),
+                int(s.ssl_verify), s.weight, s.maxconn, int(s.backup),
             ),
         )
 
@@ -55,6 +56,9 @@ def _validate(body: BackendIn):
         for server in body.servers:
             v.clean_name(server.name, "Server-Name")
             server.host = v.clean_host(server.host, "Server-Host")
+            server.ssl_verify = server.ssl and server.ssl_verify
+            if server.ssl_verify:
+                v.require_tls_hostname(server.host, f"Server '{server.name}'")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

@@ -845,6 +845,9 @@
       }"></td>
       <td class="c"><input class="srv-check" type="checkbox" ${!s || s.check ? "checked" : ""}></td>
       <td class="c"><input class="srv-ssl" type="checkbox" ${s && s.ssl ? "checked" : ""}></td>
+      <td class="c"><input class="srv-ssl-verify" type="checkbox" ${
+        s.ssl && s.ssl_verify ? "checked" : ""
+      } ${s.ssl ? "" : "disabled"}></td>
       <td style="width:80px"><input class="srv-weight" type="number" value="${
         s.weight != null ? s.weight : 100
       }"></td>
@@ -891,10 +894,13 @@
       </div>
       <h4>Server</h4>
       <table class="data">
-        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th class="c">Check</th><th class="c">SSL</th><th>Weight</th><th>Maxconn</th><th class="c">Backup</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th class="c">Check</th><th class="c">SSL</th><th class="c">Zert. prüfen</th><th>Weight</th><th>Maxconn</th><th class="c">Backup</th><th></th></tr></thead>
         <tbody id="srv-rows"></tbody>
       </table>
       <button type="button" class="btn sm" id="add-srv">+ Server</button>
+      <p class="muted">SSL ohne „Zert. prüfen“ verschlüsselt die Verbindung, prüft das
+        Server-Zertifikat aber nicht (<code>verify none</code>). Mit „Zert. prüfen“ werden
+        System-CAs und Hostname geprüft – dafür muss der Host ein DNS-Name sein (HAProxy ≥ 2.6).</p>
       <h4>Zusätzliche Zeilen</h4>
       <textarea name="extra" rows="2" placeholder="z. B. option forwardfor">${esc(
         b ? b.extra : ""
@@ -904,6 +910,12 @@
     (b ? b.servers : []).forEach((s) => srvBody.insertAdjacentHTML("beforeend", serverRow(s)));
     if (!b || !b.servers.length) srvBody.innerHTML = serverRow();
     $("#add-srv", form).onclick = () => srvBody.insertAdjacentHTML("beforeend", serverRow());
+    srvBody.addEventListener("change", (e) => {
+      if (!e.target.classList.contains("srv-ssl")) return;
+      const verify = $(".srv-ssl-verify", e.target.closest("tr"));
+      verify.disabled = !e.target.checked;
+      if (!e.target.checked) verify.checked = false;
+    });
 
     form.onsubmit = async (e) => {
       e.preventDefault();
@@ -915,6 +927,7 @@
           port: parseInt($(".srv-port", tr).value, 10),
           check: $(".srv-check", tr).checked,
           ssl: $(".srv-ssl", tr).checked,
+          ssl_verify: $(".srv-ssl", tr).checked && $(".srv-ssl-verify", tr).checked,
           weight: parseInt($(".srv-weight", tr).value, 10) || 100,
           maxconn: parseInt($(".srv-maxconn", tr).value, 10) || 0,
           backup: $(".srv-backup", tr).checked,

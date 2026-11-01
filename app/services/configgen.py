@@ -174,8 +174,23 @@ def generate_config(cluster, node=None):
                 parts.append("check")
             if s["ssl"]:
                 parts.append("ssl")
+                verify_host = None
+                if s.get("ssl_verify"):
+                    verify_host = v.require_tls_hostname(
+                        s["host"], f"Server '{s['name']}'"
+                    )
+                    parts += [
+                        "verify required",
+                        "ca-file @system-ca",
+                        f"sni str({verify_host})",
+                        f"verifyhost {verify_host}",
+                    ]
+                else:
+                    parts.append("verify none")
                 if s["check"]:
                     parts.append("check-ssl")
+                    if verify_host:
+                        parts.append(f"check-sni {verify_host}")
             if s["weight"] and s["weight"] != 100:
                 parts.append(f"weight {s['weight']}")
             if s["maxconn"]:

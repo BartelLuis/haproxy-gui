@@ -131,6 +131,20 @@ Im Frontend-Dialog gibt es jetzt eine einfache URL-Routing-Funktion:
 
 Damit lassen sich mehrere Backends mit unterschiedlichen URLs ohne manuelle ACLs konfigurieren. HAProxy erzeugt die dafür nötigen `use_backend`-Regeln automatisch.
 
+### Backends mit SSL
+
+Mit dem Haken **SSL** spricht HAProxy den Backend-Server per TLS an. Ohne
+**Zert. prüfen** wird verschlüsselt, das Server-Zertifikat aber nicht geprüft
+(`verify none`) – geeignet für interne Dienste mit selbstsignierten Zertifikaten.
+Mit **Zert. prüfen** erzeugt die GUI:
+
+```haproxy
+server app1 app.example.com:443 check ssl verify required ca-file @system-ca sni str(app.example.com) verifyhost app.example.com check-ssl check-sni app.example.com
+```
+
+Dann muss der Host ein DNS-Name sein, dessen Zertifikat von einer System-CA des
+Nodes signiert ist; `@system-ca` setzt HAProxy 2.6 oder neuer voraus.
+
 ## Umgebungsvariablen
 
 | Variable                | Standard | Beschreibung                                   |
