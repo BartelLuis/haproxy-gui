@@ -47,8 +47,8 @@ def node_stat(nid: int):
     try:
         rows = runtimesvc.show_stat(node)
         return {"ok": True, "rows": rows}
-    except runtimesvc.RuntimeResponseError as exc:
-        return {"ok": False, "error": str(exc), "rows": []}
+    except runtimesvc.RuntimeResponseError:
+        return {"ok": False, "error": runtimesvc.NO_STAT_DATA, "rows": []}
     except Exception:
         return {"ok": False, "error": "Interner Fehler beim Abrufen der Statistiken", "rows": []}
 

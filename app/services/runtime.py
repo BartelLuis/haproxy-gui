@@ -90,6 +90,7 @@ def show_info(node):
 
 
 STAT_TYPE_NAMES = {"0": "frontend", "1": "backend", "2": "server", "3": "listener"}
+NO_STAT_DATA = "Runtime-Socket lieferte keine Statistikdaten"
 
 
 class RuntimeResponseError(RuntimeError):
@@ -113,7 +114,7 @@ def show_stat(node):
             entry["type_name"] = STAT_TYPE_NAMES.get(entry.get("type", "").strip(), "")
             rows.append(entry)
     if headers is None:
-        raise RuntimeResponseError("Runtime-Socket lieferte keine Statistikdaten")
+        raise RuntimeResponseError(NO_STAT_DATA)
     return rows
 
 
