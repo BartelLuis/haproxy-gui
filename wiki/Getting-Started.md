@@ -46,8 +46,10 @@ Fertig – der HAProxy läuft. Unter **Dashboard** siehst du den Live-Status.
 1. **Zertifikate** → **+ Neues Zertifikat**
 2. Domains eintragen (z. B. `example.com`, `*.example.com`), DNS-Provider wählen,
    API-Credentials eintragen → Ausstellung läuft automatisch
-3. Ein **SSL-Frontend** (Port 443) anlegen, das Zertifikat auswählen,
-   optional „HTTP→HTTPS Redirect"
+3. Ein **SSL-Frontend** (Port 443) anlegen und unter **Zertifikate (SNI)** ein oder
+   mehrere Zertifikate hinzufügen (das erste ist der Standard), optional
+   „HTTP→HTTPS Redirect". Alternativ das Zertifikat wie beim Nginx Proxy Manager im
+   **Backend** zuordnen – SSL-Frontends, die dorthin weiterleiten, laden es automatisch.
 4. Deployen
 
 Details und alle DNS-Provider: siehe Features / Zertifikate.

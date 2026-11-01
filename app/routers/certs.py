@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from .. import auth, db as dbmod
 from ..db import audit
+from ..services import certmap
 from ..services import certs as certsvc
 from ..services import validate as v
 
@@ -47,11 +48,13 @@ def dns_providers():
 @router.get("/certificates")
 def list_certs():
     certs = dbmod.q("SELECT * FROM certificates ORDER BY name")
+    usage = certmap.cert_usage()
     for c in certs:
         c["domains"] = json.loads(c["domains"])
         pc = json.loads(c["provider_config"] or "{}")
         c["provider_config"] = {k: ("***" if v else "") for k, v in pc.items()}
         c["auto_renew"] = bool(c["auto_renew"])
+        c["used_by"] = usage.get(c["id"], [])
     return certs
 
 

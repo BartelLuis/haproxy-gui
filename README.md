@@ -36,6 +36,10 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
   (u. a. Cloudflare, Route53, DigitalOcean, **Hetzner Cloud**, Azure, DuckDNS, deSEC, IONOS,
   netcup, OVH, **Technitium DNS**, **manuelles DNS**)
   - Wildcard-Zertifikate möglich
+  - **Mehrere Zertifikate pro Frontend (SNI):** HAProxy wählt das passende Zertifikat
+    anhand des Hostnamens; Zertifikate lassen sich wie beim Nginx Proxy Manager auch
+    direkt einem Backend zuordnen und werden dann von allen SSL-Frontends geladen,
+    die auf dieses Backend weiterleiten
   - **Technitium DNS:** eigener DNS-Server via Webhook-Provider angebunden
     (Server-URL + API-Token)
   - **Manuelles DNS:** der TXT-Record wird in der GUI angezeigt, du legst ihn selbst
@@ -288,12 +292,38 @@ ein einfacher `docker compose restart` übernimmt weder ein neues Image noch die
 2. Domains eintragen (Wildcard `*.example.com` möglich), DNS-Provider wählen und die
    benötigten API-Credentials eintragen (z. B. Cloudflare: `CLOUDFLARE_DNS_API_TOKEN`)
 3. Die Ausstellung läuft im Hintergrund (DNS-Propagation: ca. 1–2 Minuten)
-4. Das Zertifikat in einem SSL-Frontend auswählen und die Config deployen –
+4. Das Zertifikat einem SSL-Frontend oder einem Backend zuordnen
+   (siehe [Mehrere Zertifikate (SNI)](#mehrere-zertifikate-sni)) und die Config deployen –
    Zertifikat und Schlüssel werden als `.crt` und `.key` auf die Nodes kopiert (`cert_dir`).
    Zusätzlich wird eine `.pem`-Datei mit Zertifikat und Schlüssel atomar aktualisiert,
    damit bestehende HAProxy-Konfigurationen mit diesem Dateipfad weiterhin funktionieren.
    Alle drei Dateien erhalten die Dateirechte `600`.
 5. **Auto-Renew** erneuert Zertifikate ab < 30 Tagen Restlaufzeit und verteilt sie neu
+
+### Mehrere Zertifikate (SNI)
+
+Ein SSL-Frontend kann mehrere Zertifikate laden. HAProxy liefert per SNI jeweils das
+Zertifikat aus, das zum angefragten Hostnamen passt (auch Wildcards):
+
+- **Frontend → Zertifikate (SNI):** eigene Zertifikate in beliebiger Reihenfolge.
+  Das erste ist das Standard-Zertifikat für Clients ohne oder mit unbekanntem Hostnamen.
+- **Backend → Zertifikate (SNI):** Wie beim Nginx Proxy Manager gehört das Zertifikat
+  zum Dienst. Jedes SSL-Frontend, das auf das Backend weiterleitet (Default-Backend oder
+  `use_backend`-Regel mit Bedingung), lädt dessen Zertifikate automatisch und braucht
+  dann kein eigenes Zertifikat. Diese Zertifikate werden den Clients präsentiert; die
+  Verbindung zu den Servern steuert weiterhin [Backends mit SSL](#backends-mit-ssl).
+- Reihenfolge auf der `bind`-Zeile: eigene Zertifikate, dann die des Default-Backends,
+  dann die der Regel-Backends; doppelte Zuordnungen werden nur einmal geladen. Backends,
+  die nur über „Zusätzliche Zeilen“ angesprochen werden, werden nicht berücksichtigt.
+- Pro Frontend sind insgesamt höchstens **25 Zertifikate** möglich, weil HAProxy maximal
+  64 Wörter pro Konfigurationszeile verarbeitet. Änderungen, nach denen ein SSL-Frontend
+  kein Zertifikat mehr hätte oder das Limit überschreiten würde, werden abgelehnt.
+- Die Spalte **Verwendet in** auf der Zertifikatsseite zeigt alle Zuordnungen. Beim
+  Löschen eines Zertifikats werden diese entfernt.
+
+```haproxy
+bind *:443 ssl crt /etc/haproxy/certs/example.com.crt crt /etc/haproxy/certs/shop.example.org.crt alpn h2,http1.1
+```
 
 ### DNS-Server für ACME
 

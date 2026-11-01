@@ -252,3 +252,108 @@ def test_extra_blocks(env, cluster):
     cfg = configgen.generate_config(fresh, cluster["node"])
     assert "    tune.ssl.default-dh-param 2048" in cfg
     assert "    option forwardfor" in cfg
+
+
+def _add_cert(env, name):
+    return env["db"].execute(
+        "INSERT INTO certificates (name, domains, dns_provider) VALUES (?, ?, 'manual')",
+        (name, f'["{name}"]'),
+    )
+
+
+def _bind_lines(cfg):
+    return [line.strip() for line in cfg.splitlines() if line.strip().startswith("bind ")]
+
+
+def test_ssl_frontend_binds_all_certificates_in_order(env, cluster):
+    from app.services import certmap
+
+    cert_ids = [_add_cert(env, name) for name in ("c.example.com", "a.example.com", "b.example.com")]
+    fid = env["db"].execute(
+        "INSERT INTO frontends (cluster_id, name, port, use_ssl) VALUES (?, 'https', 443, 1)",
+        (cluster["cluster"]["id"],),
+    )
+    certmap.save_frontend_certs(fid, cert_ids)
+    node = dict(cluster["node"], cert_dir="/etc/haproxy/certs")
+    cfg = configgen.generate_config(cluster["cluster"], node)
+    assert _bind_lines(cfg) == [
+        "bind *:443 ssl crt /etc/haproxy/certs/c.example.com.crt"
+        " crt /etc/haproxy/certs/a.example.com.crt"
+        " crt /etc/haproxy/certs/b.example.com.crt alpn h2,http1.1"
+    ]
+
+
+def test_ssl_frontend_adds_certificates_of_routed_backends(env, cluster):
+    from app.services import certmap
+
+    db = env["db"]
+    cid = cluster["cluster"]["id"]
+    own, shared, web_cert, api_cert, admin_cert, other_cert = (
+        _add_cert(env, name)
+        for name in ("own", "shared", "web-cert", "api-cert", "admin-cert", "other-cert")
+    )
+    backends = {
+        name: db.execute("INSERT INTO backends (cluster_id, name) VALUES (?, ?)", (cid, name))
+        for name in ("web", "api", "admin", "other")
+    }
+    certmap.save_backend_certs(backends["web"], [web_cert])
+    certmap.save_backend_certs(backends["api"], [api_cert, shared])
+    certmap.save_backend_certs(backends["admin"], [admin_cert])
+    certmap.save_backend_certs(backends["other"], [other_cert])
+    fid = db.execute(
+        "INSERT INTO frontends (cluster_id, name, port, use_ssl, default_backend_id, rules)"
+        " VALUES (?, 'https', 443, 1, ?, ?)",
+        (
+            cid,
+            backends["web"],
+            '[{"backend": "api", "condition": "host_api"},'
+            ' {"backend": "admin", "condition": ""}]',
+        ),
+    )
+    certmap.save_frontend_certs(fid, [own, shared])
+    cfg = configgen.generate_config(cluster["cluster"], dict(cluster["node"], cert_dir="/c"))
+    # Regeln ohne Bedingung erzeugen kein use_backend – deren Zertifikate fehlen daher.
+    assert _bind_lines(cfg) == [
+        "bind *:443 ssl crt /c/own.crt crt /c/shared.crt crt /c/web-cert.crt"
+        " crt /c/api-cert.crt alpn h2,http1.1"
+    ]
+
+
+def test_ssl_frontend_can_rely_on_backend_certificates(env, cluster):
+    from app.services import certmap
+
+    be_id = _make_backend_cluster(env, cluster["cluster"])
+    certmap.save_backend_certs(be_id, [_add_cert(env, "app.example.com")])
+    env["db"].execute(
+        "INSERT INTO frontends (cluster_id, name, port, use_ssl, default_backend_id)"
+        " VALUES (?, 'https', 443, 1, ?)",
+        (cluster["cluster"]["id"], be_id),
+    )
+    cfg = configgen.generate_config(cluster["cluster"], dict(cluster["node"], cert_dir="/c"))
+    assert _bind_lines(cfg) == ["bind *:443 ssl crt /c/app.example.com.crt alpn h2,http1.1"]
+
+
+def test_ssl_frontend_certificate_limit_fits_haproxy_line_limit(env, cluster):
+    from app.services import certmap
+
+    cert_ids = [
+        _add_cert(env, f"site{i}.example.com") for i in range(certmap.MAX_FRONTEND_CERTS + 1)
+    ]
+    fid = env["db"].execute(
+        "INSERT INTO frontends (cluster_id, name, port, use_ssl, bind_family)"
+        " VALUES (?, 'https', 443, 1, 'dual')",
+        (cluster["cluster"]["id"],),
+    )
+    certmap.save_frontend_certs(fid, cert_ids)
+    with pytest.raises(ValueError, match=f"maximal {certmap.MAX_FRONTEND_CERTS}"):
+        configgen.generate_config(cluster["cluster"], cluster["node"])
+
+    certmap.save_frontend_certs(fid, cert_ids[:-1])
+    node = dict(cluster["node"], cert_dir="/etc/haproxy/certs")
+    binds = _bind_lines(configgen.generate_config(cluster["cluster"], node))
+    assert len(binds) == 2
+    for bind in binds:
+        words = bind.split()
+        assert words.count("crt") == certmap.MAX_FRONTEND_CERTS
+        # HAProxy liest höchstens 64 Wörter pro Konfigurationszeile (MAX_LINE_ARGS).
+        assert len(words) <= 64

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from .. import auth, db as dbmod
 from ..db import audit
+from ..services import certmap
 from ..services import validate as v
 
 router = APIRouter(prefix="/api/frontends", tags=["frontends"])
@@ -20,7 +21,10 @@ class FrontendIn(BaseModel):
     port: int
     mode: str = "http"
     use_ssl: bool = False
+    # Veraltet: setzt nur das Standard-Zertifikat, wenn cert_ids fehlt.
     cert_id: int | None = None
+    # Reihenfolge = Priorität; das erste Zertifikat ist das Standard-Zertifikat.
+    cert_ids: list[int] | None = None
     ssl_redirect: bool = False
     default_backend_id: int | None = None
     acls: list = []
@@ -30,7 +34,17 @@ class FrontendIn(BaseModel):
     rate_limit_period: int = 10
 
 
-def _validate(body: FrontendIn):
+def _cert_ids(body: FrontendIn, fid: int | None = None):
+    if body.cert_ids is not None:
+        return certmap.unique_ids(body.cert_ids)
+    if not body.cert_id:
+        return []
+    # Ältere Clients senden nur cert_id: Standard ersetzen, weitere Zertifikate behalten.
+    current = certmap.frontend_cert_ids().get(fid, []) if fid else []
+    return [body.cert_id] + [c for c in current if c != body.cert_id]
+
+
+def _validate(body: FrontendIn, cert_ids: list[int]):
     if body.mode not in ("http", "tcp"):
         raise HTTPException(400, "Mode muss http oder tcp sein")
     if body.bind_family not in ("ipv4", "ipv6", "dual"):
@@ -66,31 +80,57 @@ def _validate(body: FrontendIn):
             v.no_newline(rule.get("condition", ""), "Regel-Bedingung")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    if body.use_ssl and not body.cert_id:
-        raise HTTPException(400, "SSL aktiviert, aber kein Zertifikat gewählt")
-    if body.cert_id and not dbmod.one(
-        "SELECT id FROM certificates WHERE id = ?", (body.cert_id,)
-    ):
-        raise HTTPException(400, "Zertifikat nicht gefunden")
     if body.default_backend_id and not dbmod.one(
         "SELECT id FROM backends WHERE id = ? AND cluster_id = ?",
         (body.default_backend_id, body.cluster_id),
     ):
         raise HTTPException(400, "Default-Backend nicht im selben Cluster")
+    known_certs = {row["id"] for row in dbmod.q("SELECT id FROM certificates")}
+    if any(cert_id not in known_certs for cert_id in cert_ids):
+        raise HTTPException(400, "Zertifikat nicht gefunden")
+    if len(cert_ids) > certmap.MAX_FRONTEND_CERTS:
+        raise HTTPException(
+            400, f"Maximal {certmap.MAX_FRONTEND_CERTS} Zertifikate je Frontend möglich"
+        )
+    if body.use_ssl:
+        effective = certmap.effective_cert_ids(
+            cert_ids,
+            certmap.routed_backend_ids(
+                body.default_backend_id,
+                body.rules,
+                dbmod.q("SELECT id, name FROM backends WHERE cluster_id = ?", (body.cluster_id,)),
+            ),
+            certmap.backend_cert_ids(body.cluster_id),
+        )
+        if not effective:
+            raise HTTPException(
+                400,
+                "SSL aktiviert, aber weder dem Frontend noch seinen Backends"
+                " ist ein Zertifikat zugeordnet",
+            )
+        if len(effective) > certmap.MAX_FRONTEND_CERTS:
+            raise HTTPException(
+                400,
+                f"Das Frontend hätte inkl. Backend-Zertifikaten {len(effective)}"
+                f" Zertifikate, maximal {certmap.MAX_FRONTEND_CERTS} möglich",
+            )
 
 
 @router.get("")
 def list_frontends(cluster_id: int | None = None):
     if cluster_id:
-        return dbmod.q(
+        frontends = dbmod.q(
             "SELECT * FROM frontends WHERE cluster_id = ? ORDER BY name", (cluster_id,)
         )
-    return dbmod.q("SELECT * FROM frontends ORDER BY name")
+    else:
+        frontends = dbmod.q("SELECT * FROM frontends ORDER BY name")
+    return certmap.annotate_frontends(frontends, cluster_id or None)
 
 
 @router.post("")
 def create_frontend(body: FrontendIn, user=Depends(auth.require_auth)):
-    _validate(body)
+    cert_ids = _cert_ids(body)
+    _validate(body, cert_ids)
     try:
         fid = dbmod.execute(
             "INSERT INTO frontends (cluster_id, name, bind_ip, bind_family, port, mode, use_ssl,"
@@ -99,7 +139,7 @@ def create_frontend(body: FrontendIn, user=Depends(auth.require_auth)):
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 body.cluster_id, body.name, body.bind_ip, body.bind_family, body.port, body.mode,
-                int(body.use_ssl), body.cert_id, int(body.ssl_redirect),
+                int(body.use_ssl), cert_ids[0] if cert_ids else None, int(body.ssl_redirect),
                 body.default_backend_id, json.dumps(body.acls),
                 json.dumps(body.rules), body.extra, body.rate_limit_requests,
                 body.rate_limit_period,
@@ -107,6 +147,7 @@ def create_frontend(body: FrontendIn, user=Depends(auth.require_auth)):
         )
     except sqlite3.IntegrityError:
         raise HTTPException(400, "Frontend-Name existiert in diesem Cluster bereits")
+    certmap.save_frontend_certs(fid, cert_ids)
     audit(user["username"], "frontend.create", body.name)
     return {"id": fid}
 
@@ -115,18 +156,20 @@ def create_frontend(body: FrontendIn, user=Depends(auth.require_auth)):
 def update_frontend(fid: int, body: FrontendIn, user=Depends(auth.require_auth)):
     if not dbmod.one("SELECT id FROM frontends WHERE id = ?", (fid,)):
         raise HTTPException(404, "Frontend nicht gefunden")
-    _validate(body)
+    cert_ids = _cert_ids(body, fid)
+    _validate(body, cert_ids)
     dbmod.execute(
         "UPDATE frontends SET cluster_id=?, name=?, bind_ip=?, bind_family=?, port=?, mode=?,"
         " use_ssl=?, cert_id=?, ssl_redirect=?, default_backend_id=?, acls=?,"
         " rules=?, extra=?, rate_limit_requests=?, rate_limit_period=? WHERE id=?",
         (
             body.cluster_id, body.name, body.bind_ip, body.bind_family, body.port, body.mode,
-            int(body.use_ssl), body.cert_id, int(body.ssl_redirect),
+            int(body.use_ssl), cert_ids[0] if cert_ids else None, int(body.ssl_redirect),
             body.default_backend_id, json.dumps(body.acls), json.dumps(body.rules),
             body.extra, body.rate_limit_requests, body.rate_limit_period, fid,
         ),
     )
+    certmap.save_frontend_certs(fid, cert_ids)
     audit(user["username"], "frontend.update", body.name)
     return {"ok": True}
 

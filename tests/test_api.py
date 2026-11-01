@@ -298,6 +298,113 @@ def test_backend_ssl_verification_roundtrip_and_validation(server):
     assert requests.delete(server + f"/api/backends/{bid}", headers=headers).status_code == 200
 
 
+def test_multiple_certificates_for_frontends_and_backends(server):
+    headers = _h(_login(server))
+    cid = requests.get(server + "/api/clusters", headers=headers).json()[0]["id"]
+    cert_ids, cleanup = [], []
+
+    def stored(kind, item_id):
+        items = requests.get(server + f"/api/{kind}?cluster_id={cid}", headers=headers).json()
+        return next(item for item in items if item["id"] == item_id)
+
+    try:
+        for name in ("multi-a.example.test", "multi-b.example.test", "multi-c.example.test"):
+            res = requests.post(
+                server + "/api/certificates",
+                json={"name": name, "domains": [name], "dns_provider": "manual"},
+                headers=headers,
+            )
+            assert res.status_code == 200, res.text
+            cert_ids.append(res.json()["id"])
+        a, b, c = cert_ids
+
+        be_body = {
+            "cluster_id": cid,
+            "name": "multi-app",
+            "servers": [{"name": "s1", "host": "127.0.0.1", "port": 9100}],
+            "cert_ids": [c],
+        }
+        res = requests.post(server + "/api/backends", json=be_body, headers=headers)
+        assert res.status_code == 200, res.text
+        bid = res.json()["id"]
+        cleanup.append(f"/api/backends/{bid}")
+
+        fe_body = {
+            "cluster_id": cid,
+            "name": "multi-https",
+            "port": 18443,
+            "use_ssl": True,
+            "default_backend_id": bid,
+            "cert_ids": [b, a, b],
+        }
+        res = requests.post(server + "/api/frontends", json=fe_body, headers=headers)
+        assert res.status_code == 200, res.text
+        fid = res.json()["id"]
+        cleanup.insert(0, f"/api/frontends/{fid}")
+        frontend = stored("frontends", fid)
+        assert (frontend["cert_ids"], frontend["cert_id"]) == ([b, a], b)
+        assert frontend["effective_cert_ids"] == [b, a, c]
+
+        cfg = requests.get(server + f"/api/clusters/{cid}/config", headers=headers).text
+        bind = next(line for line in cfg.splitlines() if "bind *:18443" in line)
+        assert [word.rsplit("/", 1)[-1] for word in bind.split() if word.endswith(".crt")] == [
+            "multi-b.example.test.crt", "multi-a.example.test.crt", "multi-c.example.test.crt",
+        ]
+
+        certs = {item["id"]: item for item in requests.get(
+            server + "/api/certificates", headers=headers
+        ).json()}
+        assert [(u["type"], u["name"]) for u in certs[a]["used_by"]] == [("frontend", "multi-https")]
+        assert [(u["type"], u["name"]) for u in certs[c]["used_by"]] == [("backend", "multi-app")]
+
+        # Ältere Clients senden nur cert_id: Standard wechselt, weitere bleiben erhalten.
+        legacy = {key: value for key, value in fe_body.items() if key != "cert_ids"}
+        res = requests.put(
+            server + f"/api/frontends/{fid}", json=dict(legacy, cert_id=a), headers=headers
+        )
+        assert res.status_code == 200, res.text
+        assert stored("frontends", fid)["cert_ids"] == [a, b]
+
+        # Ohne cert_ids bleiben die Backend-Zertifikate beim Bearbeiten unverändert.
+        be_update = {key: value for key, value in be_body.items() if key != "cert_ids"}
+        res = requests.put(server + f"/api/backends/{bid}", json=be_update, headers=headers)
+        assert res.status_code == 200, res.text
+        assert stored("backends", bid)["cert_ids"] == [c]
+
+        res = requests.put(
+            server + f"/api/frontends/{fid}", json=dict(fe_body, cert_ids=[]), headers=headers
+        )
+        assert res.status_code == 200, res.text
+        frontend = stored("frontends", fid)
+        assert (frontend["cert_ids"], frontend["effective_cert_ids"]) == ([], [c])
+
+        res = requests.put(
+            server + f"/api/backends/{bid}", json=dict(be_body, cert_ids=[]), headers=headers
+        )
+        assert res.status_code == 400
+        assert "multi-https" in res.json()["detail"]
+        assert stored("backends", bid)["cert_ids"] == [c]
+
+        for body, detail in (
+            (dict(fe_body, name="multi-unknown", cert_ids=[999999]), "nicht gefunden"),
+            (dict(fe_body, name="multi-none", default_backend_id=None, cert_ids=[]),
+             "weder dem Frontend noch seinen Backends"),
+        ):
+            res = requests.post(server + "/api/frontends", json=body, headers=headers)
+            assert res.status_code == 400, res.text
+            assert detail in res.json()["detail"]
+
+        res = requests.delete(server + f"/api/certificates/{c}", headers=headers)
+        assert res.status_code == 200
+        cert_ids.remove(c)
+        assert stored("backends", bid)["cert_ids"] == []
+    finally:
+        for path in cleanup:
+            requests.delete(server + path, headers=headers)
+        for cert_id in cert_ids:
+            requests.delete(server + f"/api/certificates/{cert_id}", headers=headers)
+
+
 def test_versions_and_audit(server):
     token = _login(server)
     audit = requests.get(server + "/api/audit", headers=_h(token)).json()
