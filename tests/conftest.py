@@ -35,3 +35,47 @@ def cluster(env):
     cluster = env["db"].one("SELECT * FROM clusters WHERE name = 'Local'")
     node = env["db"].one("SELECT * FROM nodes WHERE cluster_id = ?", (cluster["id"],))
     return {"cluster": cluster, "node": node}
+
+
+@pytest.fixture()
+def certificate_factory():
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    def create(
+        domains=("example.test", "*.example.test"), *, key=None, issuer=None,
+        valid_days=90, not_before=None, san_names=None, is_ca=False,
+    ):
+        key = key or ec.generate_private_key(ec.SECP256R1())
+        now = datetime.now(timezone.utc)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domains[0])])
+        builder = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer["cert"].subject if issuer else subject)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(not_before or now - timedelta(days=2))
+            .not_valid_after(now + timedelta(days=valid_days))
+            .add_extension(x509.BasicConstraints(ca=is_ca, path_length=None), critical=True)
+        )
+        names = [x509.DNSName(domain) for domain in domains] if san_names is None else san_names
+        if names:
+            builder = builder.add_extension(x509.SubjectAlternativeName(names), critical=False)
+        cert = builder.sign(issuer["key"] if issuer else key, hashes.SHA256())
+        return {
+            "cert": cert,
+            "key": key,
+            "certificate_pem": cert.public_bytes(serialization.Encoding.PEM).decode("ascii"),
+            "private_key_pem": key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ).decode("ascii"),
+        }
+
+    return create

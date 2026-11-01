@@ -46,11 +46,42 @@ Zertifikat mehr hätte, werden mit `400` abgelehnt.
 | GET | `/api/dns-providers` | Verfügbare DNS-Provider |
 | GET | `/api/acme/settings` | Globale DNS-Resolver lesen (viewer+) |
 | PUT | `/api/acme/settings` | Globale DNS-Resolver ändern (nur admin), `{dns_resolvers: [...]}` |
-| GET/POST/DELETE | `/api/certificates[/{id}]` | Zertifikate (Let's Encrypt DNS-01); `GET` liefert in `used_by` die zugeordneten Frontends und Backends |
-| POST | `/api/certificates/{id}/renew` | Erneuern |
+| GET/POST/DELETE | `/api/certificates[/{id}]` | Zertifikate lesen/löschen, mit `POST` über Let's Encrypt DNS-01 anlegen; `GET` liefert `source` (`acme`/`imported`) und in `used_by` die zugeordneten Frontends und Backends |
+| POST | `/api/certificates/import` | PEM oder PFX/P12 importieren (operator+), liefert `{id}` |
+| PUT | `/api/certificates/{id}/import` | Importiertes Zertifikat ersetzen (operator+), liefert `{ok: true}`; ID, Name und Zuordnungen bleiben erhalten |
+| POST | `/api/certificates/{id}/renew` | Let's-Encrypt-Zertifikat erneuern; für importierte Zertifikate nicht verfügbar |
+| PUT | `/api/certificates/{id}/auto-renew` | `{auto_renew: bool}`; für importierte Zertifikate nicht aktivierbar |
 | POST | `/api/certificates/{id}/deploy` | Auf Nodes verteilen |
 | GET | `/api/certificates/{id}/challenge` | Manuelle DNS-Challenge lesen |
 | POST | `/api/certificates/{id}/confirm` | Manuelle DNS bestätigen |
+
+### Import
+
+Beide Import-Endpunkte erwarten JSON. Beim Anlegen zusätzlich `name` angeben;
+beim Ersetzen ist der bestehende Name unveränderlich.
+
+- **PEM:** `format: "pem"` (Standard), `certificate_pem` (Zertifikat/Fullchain),
+  `private_key_pem` (entfällt bei kombiniertem PEM), optional `chain_pem` und `password`.
+- **PFX/PKCS#12:** `format: "pkcs12"`, `pkcs12_base64` (Base64 des binären Dateiinhalts),
+  optional `password`. Nicht mit PEM-Feldern kombinieren.
+
+Domains (DNS-/IP-SAN, CN nur ohne SAN) und `not_after` werden aus dem Zertifikat
+gelesen; `source` ist `imported`, `status` ist `active`, `auto_renew` ist `false`.
+Zertifikatsmaterial und Schlüssel müssen zusammenpassen und zum Importzeitpunkt
+gültig sein. Mitgelieferte Zwischenzertifikate werden geordnet und ihre
+Ausstellersignaturen geprüft; identische Zertifikate werden dedupliziert.
+Maximal 1 MiB PEM-Material insgesamt bzw. 1 MiB dekodierte PFX/P12-Daten und
+32 Zertifikate inklusive Kette. Ungültige Importe werden mit `400` abgelehnt,
+ohne bestehende Zertifikate zu verändern.
+
+Import-Passwörter werden nicht gespeichert, private Schlüssel verschlüsselt
+gespeichert und nicht über `GET` zurückgegeben. Import und Ersetzen lösen **kein**
+Deployment aus; danach `/api/certificates/{id}/deploy` bzw. den Cluster-Deploy
+aufrufen. Bestehende Let's-Encrypt-Einträge lassen sich nicht per Import überschreiben.
+`renew`, das Aktivieren von Auto-Renew und DNS-Challenges werden für importierte
+Zertifikate mit `400` abgelehnt.
+
+### ACME-DNS-Resolver
 
 `dns_resolvers` ist eine Liste von IPv4-/IPv6-Adressen mit optionalem Port,
 z. B. `{"dns_resolvers": ["9.9.9.9", "1.1.1.1", "[2620:fe::fe]:53"]}`.

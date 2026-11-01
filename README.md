@@ -47,6 +47,9 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
   - Automatische Erneuerung (< 30 Tage Restlaufzeit) und Verteilung auf die Nodes
     (bei manuellem DNS ohne Auto-Renew – dort erscheint die neue Challenge in der GUI)
   - Globale ACME-DNS-Resolver in der GUI konfigurierbar (Standard: `9.9.9.9`, `1.1.1.1`)
+- **Manueller Zertifikatsimport:** PEM (Zertifikat/Fullchain und Schlüssel) sowie
+  PFX/PKCS#12, auch passwortgeschützt. Importierte Zertifikate sind für Frontends und
+  Backends nutzbar und können ohne Verlust ihrer Zuordnungen ersetzt werden.
 - **Live-Monitoring** über die HAProxy Runtime-API: Status aller Proxys/Server,
   Server zur Laufzeit aktivieren / drainen / in Wartung nehmen
 - **Auth & Benutzerverwaltung:** mehrere Benutzer mit Rollen
@@ -286,9 +289,11 @@ ein einfacher `docker compose restart` übernimmt weder ein neues Image noch die
 | Docker-Container    | `docker kill -s HUP haproxy`                                    |
 | Master-Worker (-W)  | `sigusr2` (wird zu `kill -USR2 $(cat /run/haproxy/master.pid)`) |
 
-## Zertifikate (DNS-01)
+## Zertifikate
 
-1. **Zertifikate → + Neues Zertifikat**
+### Let's Encrypt (DNS-01)
+
+1. **Zertifikate → + Let's Encrypt**
 2. Domains eintragen (Wildcard `*.example.com` möglich), DNS-Provider wählen und die
    benötigten API-Credentials eintragen (z. B. Cloudflare: `CLOUDFLARE_DNS_API_TOKEN`)
 3. Die Ausstellung läuft im Hintergrund (DNS-Propagation: ca. 1–2 Minuten)
@@ -299,6 +304,38 @@ ein einfacher `docker compose restart` übernimmt weder ein neues Image noch die
    damit bestehende HAProxy-Konfigurationen mit diesem Dateipfad weiterhin funktionieren.
    Alle drei Dateien erhalten die Dateirechte `600`.
 5. **Auto-Renew** erneuert Zertifikate ab < 30 Tagen Restlaufzeit und verteilt sie neu
+
+### Zertifikate manuell importieren
+
+1. **Zertifikate → Importieren**, internen Namen und Format wählen:
+   - **PEM:** Zertifikat/Fullchain und privaten Schlüssel als Dateien hochladen oder
+     als Text einfügen. Zwischenzertifikate können zusätzlich angegeben werden.
+     Ein kombiniertes PEM mit Zertifikat und Schlüssel ist ebenfalls möglich.
+   - **PFX/PKCS#12:** `.pfx`- oder `.p12`-Datei mit Zertifikat und privatem Schlüssel
+     auswählen.
+2. Bei verschlüsseltem Schlüssel bzw. PFX/P12 das Passwort eingeben.
+3. **Importieren**: Domains (SAN, ansonsten CN) und Ablaufdatum werden automatisch
+   übernommen. Schlüssel und Zertifikat müssen zusammenpassen; abgelaufene oder
+   noch nicht gültige Zertifikate sowie ungültige mitgelieferte Ketten werden abgelehnt.
+   Maximal **1 MiB** Material pro Import und **32 Zertifikate** inklusive Kette.
+4. Das Zertifikat einem Frontend oder Backend zuordnen und die Config deployen.
+   Mehrere importierte und Let's-Encrypt-Zertifikate können gemeinsam per SNI
+   verwendet werden. Selbstsignierte Zertifikate sind möglich; Vertrauen auf den
+   Clients wird durch den Import nicht automatisch hergestellt.
+
+Importierte Zertifikate erscheinen als **Manuell importiert** und werden **nicht
+automatisch erneuert**. Über **Ersetzen** eine neue Version importieren: Name, ID und
+Frontend-/Backend-Zuordnungen bleiben erhalten. Die aktive HAProxy-Instanz bleibt
+unverändert, bis du ausdrücklich **Verteilen** oder einen Config-Deploy ausführst.
+Ablaufwarnungen gelten auch für importierte Zertifikate.
+
+Das Import-Passwort wird nicht gespeichert. Private Schlüssel werden mit der
+vorhandenen Fernet-Verschlüsselung separat von den öffentlichen Zertifikatsmetadaten
+in der Datenbank gespeichert und von der API nicht zurückgegeben. Sichere beim
+Backup auch das Anwendungssecret (`APP_SECRET` bzw. `/data/app_secret`).
+Auf den Nodes werden Zertifikat und unverschlüsselter Schlüssel wie gewohnt mit
+Dateirechten `0600` installiert. Die GUI für den Import nur über HTTPS bzw. einen
+geschützten Tunnel verwenden.
 
 ### Mehrere Zertifikate (SNI)
 

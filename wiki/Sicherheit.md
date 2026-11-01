@@ -17,6 +17,13 @@ eingebauten Schutzmechanismen und empfohlene Maßnahmen für den produktiven Bet
 | **API-Tokens** | `hg_…`-Tokens mit eigener Rolle, nur Hash gespeichert |
 | **Audit-Log** | Alle Schreibaktionen, Logins und Fehlversuche nachvollziehbar |
 
+Importierte TLS-Schlüssel werden mit dem vorhandenen Fernet-Helfer verschlüsselt in
+einer separaten DB-Tabelle gespeichert. Die Zertifikats-API liefert weder Schlüssel
+noch Import-Passwörter zurück; das Import-Passwort wird nicht aufbewahrt. Für die
+Wiederherstellung zusätzlich zur Datenbank das Anwendungssecret sichern (`APP_SECRET`
+bzw. `/data/app_secret`). Auf den HAProxy-Nodes liegen die Schlüssel ohne Passwort
+mit Dateirechten `0600`, damit HAProxy unbeaufsichtigt starten kann.
+
 ## Empfehlungen für den Produktivbetrieb
 
 1. **TLS zwingend verwenden.** Die GUI selbst spricht HTTP – stelle sie hinter einen

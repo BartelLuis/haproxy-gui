@@ -1,3 +1,4 @@
+import base64
 import os
 import subprocess
 import sys
@@ -426,6 +427,105 @@ def test_dns_providers_and_cert_validation(server):
         headers=_h(token),
     )
     assert bad.status_code == 400
+
+
+@pytest.mark.parametrize("format", ["pem", "pkcs12"])
+def test_manual_certificate_import_and_replacement(server, certificate_factory, format):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.serialization import pkcs12
+
+    headers = _h(_login(server))
+    leaf = certificate_factory((f"import-{format}.example.test", "*.example.test"))
+    name = f"import-{format}"
+    body = {"name": name, "format": format}
+    if format == "pem":
+        body.update(certificate_pem=leaf["certificate_pem"], private_key_pem=leaf["private_key_pem"])
+    else:
+        data = pkcs12.serialize_key_and_certificates(
+            b"test-only", leaf["key"], leaf["cert"], None,
+            serialization.BestAvailableEncryption(b"test-import-password"),
+        )
+        body.update(pkcs12_base64=base64.b64encode(data).decode("ascii"), password="test-import-password")
+    assert requests.post(server + "/api/certificates/import", json=body).status_code == 401
+    viewer = requests.post(
+        server + "/api/tokens", json={"name": f"import-viewer-{format}", "role": "viewer"},
+        headers=headers,
+    )
+    assert viewer.status_code == 200, viewer.text
+    viewer_headers = _h(viewer.json()["token"])
+    assert requests.post(
+        server + "/api/certificates/import", json=body, headers=viewer_headers
+    ).status_code == 403
+    cleanup = []
+    try:
+        response = requests.post(server + "/api/certificates/import", json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        cid = response.json()["id"]
+        cleanup.append(f"/api/certificates/{cid}")
+
+        def stored():
+            response = requests.get(server + "/api/certificates", headers=headers)
+            assert response.status_code == 200
+            return next(cert for cert in response.json() if cert["id"] == cid)
+
+        cert = stored()
+        assert cert["source"] == "imported"
+        assert cert["status"] == "active"
+        assert cert["auto_renew"] is False
+        assert cert["domains"] == [f"import-{format}.example.test", "*.example.test"]
+        assert cert["not_after"] == leaf["cert"].not_valid_after_utc.isoformat()
+        assert "private_key_pem" not in cert and "key_encrypted" not in cert
+        assert requests.post(
+            server + f"/api/certificates/{cid}/renew", headers=headers
+        ).status_code == 400
+        assert requests.put(
+            server + f"/api/certificates/{cid}/auto-renew",
+            json={"auto_renew": True}, headers=headers,
+        ).status_code == 400
+        cluster = requests.get(server + "/api/clusters", headers=headers).json()[0]
+        backend = requests.post(server + "/api/backends", headers=headers, json={
+            "cluster_id": cluster["id"], "name": f"be-{name}", "cert_ids": [cid],
+        })
+        assert backend.status_code == 200, backend.text
+        bid = backend.json()["id"]
+        cleanup.append(f"/api/backends/{bid}")
+        frontend = requests.post(server + "/api/frontends", headers=headers, json={
+            "cluster_id": cluster["id"], "name": f"fe-{name}", "port": 18444,
+            "use_ssl": True, "cert_ids": [], "default_backend_id": bid,
+        })
+        assert frontend.status_code == 200, frontend.text
+        fid = frontend.json()["id"]
+        cleanup.append(f"/api/frontends/{fid}")
+        config = requests.get(server + f"/api/clusters/{cluster['id']}/config", headers=headers)
+        assert config.status_code == 200, config.text
+        assert f"{name}.crt" in config.text
+
+        replacement = certificate_factory((f"new-{format}.example.test",), valid_days=180)
+        replacement_body = {
+            "certificate_pem": replacement["certificate_pem"],
+            "private_key_pem": replacement["private_key_pem"],
+        }
+        url = server + f"/api/certificates/{cid}/import"
+        assert requests.put(url, json=replacement_body, headers=viewer_headers).status_code == 403
+        before = stored()
+        invalid = requests.put(
+            url, json={**replacement_body, "private_key_pem": leaf["private_key_pem"]}, headers=headers
+        )
+        assert invalid.status_code == 400, invalid.text
+        assert leaf["private_key_pem"] not in invalid.text
+        assert stored() == before
+        replaced = requests.put(url, json=replacement_body, headers=headers)
+        assert replaced.status_code == 200, replaced.text
+        updated = stored()
+        assert updated["name"] == name
+        assert updated["domains"] == [f"new-{format}.example.test"]
+        assert updated["used_by"] == before["used_by"]
+        frontends = requests.get(server + "/api/frontends", headers=headers).json()
+        assert next(fe for fe in frontends if fe["id"] == fid)["effective_cert_ids"] == [cid]
+        assert "test-import-password" not in str(updated)
+    finally:
+        for path in reversed(cleanup):
+            requests.delete(server + path, headers=headers)
 
 
 def test_acme_settings_require_authentication(server):
