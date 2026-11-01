@@ -26,8 +26,18 @@ Alle Endpunkte unter `/api`. Authentifizierung per `Authorization: Bearer hg_<to
 
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
-| GET/POST/PUT/DELETE | `/api/frontends[/{id}]` | Frontends (Binds, SSL, ACLs, Regeln) |
-| GET/POST/PUT/DELETE | `/api/backends[/{id}]` | Backends inkl. Server (`ssl`, `ssl_verify`: CA- und Hostname-Prüfung, nur mit `ssl` und DNS-Hostname) |
+| GET/POST/PUT/DELETE | `/api/frontends[/{id}]` | Frontends (Binds, SSL, Zertifikate `cert_ids`, ACLs, Regeln) |
+| GET/POST/PUT/DELETE | `/api/backends[/{id}]` | Backends inkl. Server (`ssl`, `ssl_verify`: CA- und Hostname-Prüfung, nur mit `ssl` und DNS-Hostname) und Zertifikaten (`cert_ids`) |
+
+`cert_ids` ist eine geordnete Liste von Zertifikats-IDs (SNI); beim Frontend ist das
+erste Zertifikat der Standard. `GET /api/frontends` liefert zusätzlich
+`effective_cert_ids`: alle Zertifikate, die das Frontend lädt, inklusive derer seiner
+Backends (Default-Backend und `use_backend`-Regeln mit Bedingung). Das ältere Feld
+`cert_id` bleibt kompatibel: Ohne `cert_ids` ersetzt es nur das Standard-Zertifikat,
+weitere Zertifikate bleiben erhalten. Fehlt `cert_ids` beim Bearbeiten eines Backends,
+bleibt dessen Zuordnung unverändert. Pro Frontend sind inklusive Backend-Zertifikaten
+höchstens 25 Zertifikate möglich; Änderungen, nach denen ein SSL-Frontend kein
+Zertifikat mehr hätte, werden mit `400` abgelehnt.
 
 ## Zertifikate
 
@@ -36,7 +46,7 @@ Alle Endpunkte unter `/api`. Authentifizierung per `Authorization: Bearer hg_<to
 | GET | `/api/dns-providers` | Verfügbare DNS-Provider |
 | GET | `/api/acme/settings` | Globale DNS-Resolver lesen (viewer+) |
 | PUT | `/api/acme/settings` | Globale DNS-Resolver ändern (nur admin), `{dns_resolvers: [...]}` |
-| GET/POST/DELETE | `/api/certificates[/{id}]` | Zertifikate (Let's Encrypt DNS-01) |
+| GET/POST/DELETE | `/api/certificates[/{id}]` | Zertifikate (Let's Encrypt DNS-01); `GET` liefert in `used_by` die zugeordneten Frontends und Backends |
 | POST | `/api/certificates/{id}/renew` | Erneuern |
 | POST | `/api/certificates/{id}/deploy` | Auf Nodes verteilen |
 | GET | `/api/certificates/{id}/challenge` | Manuelle DNS-Challenge lesen |

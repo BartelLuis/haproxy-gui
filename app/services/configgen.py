@@ -2,6 +2,7 @@ import json
 import ipaddress
 
 from .. import db as dbmod
+from . import certmap
 from . import validate as v
 
 
@@ -21,9 +22,12 @@ def _normalize_condition(cond):
 
 
 def generate_config(cluster, node=None):
-    fe_list = dbmod.q(
-        "SELECT * FROM frontends WHERE cluster_id = ? ORDER BY port, name",
-        (cluster["id"],),
+    fe_list = certmap.annotate_frontends(
+        dbmod.q(
+            "SELECT * FROM frontends WHERE cluster_id = ? ORDER BY port, name",
+            (cluster["id"],),
+        ),
+        cluster["id"],
     )
     be_list = dbmod.q(
         "SELECT * FROM backends WHERE cluster_id = ? ORDER BY name", (cluster["id"],)
@@ -100,21 +104,32 @@ def generate_config(cluster, node=None):
             else [("::" if bind_family == "ipv6" and bind_ip == "*" else bind_ip,
                    bind_family == "ipv6")]
         )
-        cert = None
+        cert_names = []
         if fe["use_ssl"]:
-            cert = certs.get(fe["cert_id"])
-            if not cert:
+            # Eigene Zertifikate zuerst (das erste ist der Standard), dann die der Backends.
+            cert_names = [
+                v.clean_name(certs[cid]["name"], "Zertifikatsname")
+                for cid in fe["effective_cert_ids"]
+                if cid in certs
+            ]
+            if not cert_names:
                 raise ValueError(
                     f"Frontend '{fe['name']}': kein Zertifikat zugeordnet"
+                )
+            if len(cert_names) > certmap.MAX_FRONTEND_CERTS:
+                raise ValueError(
+                    f"Frontend '{fe['name']}': {len(cert_names)} Zertifikate,"
+                    f" maximal {certmap.MAX_FRONTEND_CERTS} möglich"
                 )
         for address, ipv6 in bind_ips:
             bind = f"    bind {address}:{fe['port']}"
             if ipv6:
                 bind += " v6only"
-            if cert:
+            if cert_names:
                 bind += (
-                    f" ssl crt {cert_dir}/{cert['name']}.crt"
-                    " alpn h2,http1.1"
+                    " ssl"
+                    + "".join(f" crt {cert_dir}/{name}.crt" for name in cert_names)
+                    + " alpn h2,http1.1"
                 )
             lines.append(bind)
         lines.append(f"    mode {fe['mode']}")

@@ -92,6 +92,20 @@ CREATE TABLE IF NOT EXISTS frontends (
     rate_limit_period INTEGER NOT NULL DEFAULT 10,
     UNIQUE(cluster_id, name)
 );
+CREATE TABLE IF NOT EXISTS frontend_certs (
+    frontend_id INTEGER NOT NULL REFERENCES frontends(id) ON DELETE CASCADE,
+    cert_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (frontend_id, cert_id)
+);
+CREATE INDEX IF NOT EXISTS idx_frontend_certs_cert ON frontend_certs(cert_id);
+CREATE TABLE IF NOT EXISTS backend_certs (
+    backend_id INTEGER NOT NULL REFERENCES backends(id) ON DELETE CASCADE,
+    cert_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (backend_id, cert_id)
+);
+CREATE INDEX IF NOT EXISTS idx_backend_certs_cert ON backend_certs(cert_id);
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,

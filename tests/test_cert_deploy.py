@@ -295,3 +295,47 @@ def test_local_compatible_pem_is_updated_or_restored(tmp_path, legacy_exists, tr
     assert (tmp_path / "demo.crt").read_bytes() == crt
     assert (tmp_path / "demo.key").read_bytes() == KEY_BYTES
     assert pem.read_bytes() == CERT_BYTES + KEY_BYTES
+
+
+@pytest.mark.parametrize("entrypoint", ["certificate", "configuration"])
+def test_certificate_assigned_via_backend_is_deployed(env, remote_certificate, entrypoint):
+    from app.services import certmap
+
+    case = remote_certificate
+    db = env["db"]
+    backend_id = db.execute(
+        "INSERT INTO backends (cluster_id, name) VALUES (?, 'app')", (case["cluster"]["id"],)
+    )
+    certmap.save_backend_certs(backend_id, [case["cert_id"]])
+    frontend_id = db.one("SELECT id FROM frontends WHERE name = 'https'")["id"]
+    db.execute(
+        "UPDATE frontends SET default_backend_id = ? WHERE id = ?", (backend_id, frontend_id)
+    )
+    certmap.save_frontend_certs(frontend_id, [])
+
+    files, warnings = case["certs"].cluster_cert_files(case["cluster"]["id"])
+    assert sorted(files) == [f"{CERT_NAME}.crt", f"{CERT_NAME}.key"]
+    assert warnings == []
+    result = _deploy(case, entrypoint)
+
+    assert result["ok"], result
+    writes = {event[1]: event[2] for event in case["events"] if event[0] == "write"}
+    assert writes[f"{CERT_DIR}/{CERT_NAME}.crt"] == CERT_BYTES + ISSUER_BYTES
+    assert writes[f"{CERT_DIR}/{CERT_NAME}.key"] == KEY_BYTES
+    assert ("reload", case["node"]["id"]) in case["events"]
+    if entrypoint == "configuration":
+        config = writes[case["node"]["config_path"] + ".new"]
+        assert f"bind *:443 ssl crt {CERT_DIR}/{CERT_NAME}.crt alpn".encode() in config
+
+
+def test_unused_certificate_is_not_deployed(env, remote_certificate):
+    from app.services import certmap
+
+    case = remote_certificate
+    frontend_id = env["db"].one("SELECT id FROM frontends WHERE name = 'https'")["id"]
+    certmap.save_frontend_certs(frontend_id, [])
+
+    [result] = case["certs"].deploy_cert(case["cert_id"])
+    assert result["ok"] is True
+    assert "nichts zu tun" in result["log"][0]
+    assert case["events"] == []

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from cryptography import x509
 
 from .. import db as dbmod
+from . import certmap
 from . import validate as v
 
 ACME_DIR = os.path.join(os.environ.get("HG_DATA", "/data"), "acme")
@@ -193,13 +194,11 @@ def key_bytes(cert):
 
 
 def cluster_cert_files(cluster_id):
-    """Alle Zertifikate und Keys, die von SSL-Frontends des Clusters referenziert werden."""
-    rows = dbmod.q(
-        "SELECT DISTINCT c.* FROM certificates c"
-        " JOIN frontends f ON f.cert_id = c.id"
-        " WHERE f.cluster_id = ? AND f.use_ssl = 1",
-        (cluster_id,),
-    )
+    """Alle Zertifikate und Keys, die SSL-Frontends des Clusters laden (inkl. Backends)."""
+    used = certmap.used_cert_ids(cluster_id)
+    rows = [
+        c for c in dbmod.q("SELECT * FROM certificates ORDER BY name") if c["id"] in used
+    ]
     files, warnings = {}, []
     for cert in rows:
         crt = pem_bytes(cert)
@@ -513,25 +512,23 @@ def deploy_cert(cert_id):
     cert_name = cert["name"]
     cert_file = cert_name + ".crt"
     key_file = cert_name + ".key"
-    clusters = dbmod.q(
-        "SELECT DISTINCT cl.* FROM clusters cl"
-        " JOIN frontends f ON f.cluster_id = cl.id"
-        " WHERE f.cert_id = ? AND f.use_ssl = 1",
-        (cert_id,),
-    )
-    if not clusters:
+    cluster_ids = certmap.clusters_using_cert(cert_id)
+    if not cluster_ids:
         return [
             {
                 "node": "-",
                 "ok": True,
                 "error": "",
-                "log": ["Zertifikat wird von keinem SSL-Frontend genutzt – nichts zu tun."],
+                "log": [
+                    "Zertifikat wird von keinem SSL-Frontend genutzt (weder direkt"
+                    " noch über ein Backend) – nichts zu tun."
+                ],
             }
         ]
     results = []
-    for cluster in clusters:
+    for cluster_id in cluster_ids:
         for node in dbmod.q(
-            "SELECT * FROM nodes WHERE cluster_id = ?", (cluster["id"],)
+            "SELECT * FROM nodes WHERE cluster_id = ?", (cluster_id,)
         ):
             log = []
             try:

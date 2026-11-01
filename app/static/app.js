@@ -220,6 +220,46 @@
     );
   }
 
+  function certName(id) {
+    const c = state.certs.find((x) => x.id === id);
+    return c ? c.name : `#${id}`;
+  }
+
+  function certRow(certId) {
+    return `<tr>
+      <td><select class="cert-select">${certOptions(certId)}</select></td>
+      <td class="c"><button type="button" class="btn sm danger del-row">✕</button></td>
+    </tr>`;
+  }
+
+  function certRowsEditor(tbodyId, hint) {
+    return `<table class="data"><thead><tr><th>Zertifikat</th><th></th></tr></thead>
+        <tbody id="${tbodyId}"></tbody></table>
+      <button type="button" class="btn sm" data-add-cert="${tbodyId}">+ Zertifikat</button>
+      <p class="muted">${hint}</p>`;
+  }
+
+  function initCertRows(form, tbodyId, certIds) {
+    const body = $(`#${tbodyId}`, form);
+    (certIds || []).forEach((id) => body.insertAdjacentHTML("beforeend", certRow(id)));
+    if (!body.children.length) body.innerHTML = certRow(null);
+    $(`[data-add-cert="${tbodyId}"]`, form).onclick = () =>
+      body.insertAdjacentHTML("beforeend", certRow(null));
+  }
+
+  function selectedCertIds(form, tbodyId) {
+    const ids = $$(`#${tbodyId} .cert-select`, form)
+      .map((s) => parseInt(s.value, 10))
+      .filter((id) => id > 0);
+    return [...new Set(ids)];
+  }
+
+  function certUsageText(usedBy) {
+    return (usedBy || [])
+      .map((u) => `${u.type === "frontend" ? "Frontend" : "Backend"} ${u.name} (${u.cluster})`)
+      .join(", ");
+  }
+
   function backendNameOptions(clusterId, selectedName) {
     return (
       '<option value="">–</option>' +
@@ -528,9 +568,17 @@
       api("/api/backends"),
       api("/api/certificates"),
     ]);
-    const certName = (id) => {
-      const c = state.certs.find((x) => x.id === id);
-      return c ? c.name : "-";
+    const frontendCerts = (f) => {
+      const own = f.cert_ids || [];
+      const inherited = (f.effective_cert_ids || own).filter((id) => !own.includes(id));
+      if (!own.length && !inherited.length) return '<span class="badge err">kein Zertifikat</span>';
+      let html = esc(own.map(certName).join(", "));
+      if (inherited.length) {
+        html += `${own.length ? " " : ""}<span class="muted">${own.length ? "+ " : ""}über Backend: ${esc(
+          inherited.map(certName).join(", ")
+        )}</span>`;
+      }
+      return html;
     };
     el.innerHTML =
       `<div class="page-head"><h2>Frontends</h2>
@@ -556,7 +604,7 @@
                     f.bind_family === "dual" ? "(IPv4 + IPv6)" : f.bind_family === "ipv6" ? "(IPv6)" : ""
                   }</td>
                   <td>${esc(f.mode)}</td>
-                  <td>${f.use_ssl ? esc(certName(f.cert_id)) : "-"}</td>
+                  <td>${f.use_ssl ? frontendCerts(f) : "-"}</td>
                   <td>${f.rate_limit_requests ? `${f.rate_limit_requests} / ${f.rate_limit_period}s` : "-"}</td>
                   <td>${be ? esc(be.name) : "-"}</td>
                   <td>
@@ -621,6 +669,10 @@
     const acls = f ? JSON.parse(f.acls || "[]") : [];
     const rules = f ? JSON.parse(f.rules || "[]") : [];
     const cid0 = f ? f.cluster_id : state.clusters[0].id;
+    const ownCertIds = f ? f.cert_ids || (f.cert_id ? [f.cert_id] : []) : [];
+    const inheritedCertIds = f
+      ? (f.effective_cert_ids || []).filter((cid) => !ownCertIds.includes(cid))
+      : [];
     const { close, form } = openModal(
       f ? "Frontend bearbeiten" : "Neues Frontend",
       `
@@ -652,7 +704,6 @@
           f && f.ssl_redirect ? "checked" : ""
         }> HTTP→HTTPS Redirect</label>
       </div>
-      <label>Zertifikat<select name="cert_id">${certOptions(f ? f.cert_id : null)}</select></label>
       <label>Default-Backend<select name="default_backend_id" id="fe-backend"></select></label>
       <div class="row">
         <label>Max. HTTP-Anfragen pro Client (0 = aus)
@@ -667,6 +718,20 @@
         </label>
       </div>
       <p class="muted">IPv6-Adressen werden für das Limit pro /64 zusammengefasst.</p>
+      <h4>Zertifikate (SNI)</h4>
+      ${certRowsEditor(
+        "fe-cert-rows",
+        "HAProxy wählt das Zertifikat passend zum angefragten Hostnamen (SNI). Das erste ist das " +
+          "Standard-Zertifikat für Clients ohne oder mit unbekanntem Hostnamen. Zertifikate der " +
+          "Backends, an die dieses Frontend weiterleitet, werden automatisch ergänzt."
+      )}
+      ${
+        inheritedCertIds.length
+          ? `<p class="muted">Aktuell zusätzlich über Backends: ${esc(
+              inheritedCertIds.map(certName).join(", ")
+            )}</p>`
+          : ""
+      }
       <h4>URL-Routen (einfach)</h4>
       <p class="muted">Host, Pfad oder beides auf ein Backend weiterleiten. Beispiel: app.example.com → app, /admin → admin.</p>
       <table class="data"><thead><tr><th>Backend</th><th>Host</th><th>Pfad</th><th></th></tr></thead>
@@ -711,6 +776,7 @@
     const aclBody = $("#acl-rows", form);
     const ruleBody = $("#rule-rows", form);
     const routeBody = $("#route-rows", form);
+    initCertRows(form, "fe-cert-rows", ownCertIds);
     acls.forEach((a) => aclBody.insertAdjacentHTML("beforeend", aclRow(a)));
     if (!acls.length) aclBody.innerHTML = aclRow();
     rules.forEach((r) => ruleBody.insertAdjacentHTML("beforeend", ruleRow(cid0, r)));
@@ -763,7 +829,7 @@
         port: parseInt(fd.get("port"), 10),
         mode: fd.get("mode"),
         use_ssl: fd.get("use_ssl") === "on",
-        cert_id: fd.get("cert_id") ? parseInt(fd.get("cert_id"), 10) : null,
+        cert_ids: selectedCertIds(form, "fe-cert-rows"),
         ssl_redirect: fd.get("ssl_redirect") === "on",
         default_backend_id: fd.get("default_backend_id")
           ? parseInt(fd.get("default_backend_id"), 10)
@@ -791,9 +857,10 @@
 
   // ---------------- Backends ----------------
   routes.backends = async function (el) {
-    [state.clusters, state.backends] = await Promise.all([
+    [state.clusters, state.backends, state.certs] = await Promise.all([
       api("/api/clusters"),
       api("/api/backends"),
+      api("/api/certificates"),
     ]);
     el.innerHTML =
       `<div class="page-head"><h2>Backends</h2>
@@ -807,7 +874,7 @@
         <div class="card">
           <div class="card-head"><h3>${esc(c.name)}</h3></div>
           <table class="data">
-            <thead><tr><th>Name</th><th>Mode</th><th>Balance</th><th>Health-Check</th><th>Server</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Mode</th><th>Balance</th><th>Health-Check</th><th>Server</th><th>Zertifikate</th><th></th></tr></thead>
             <tbody>
               ${bes
                 .map(
@@ -820,6 +887,7 @@
                   <td>${b.servers
                     .map((s) => `${esc(s.name)} (${esc(hostPort(s.host, s.port))})`)
                     .join(", ") || '<span class="muted">keine</span>'}</td>
+                  <td>${(b.cert_ids || []).length ? esc(b.cert_ids.map(certName).join(", ")) : "-"}</td>
                   <td>
                     <button class="btn sm" onclick="App.editBackend(${b.id})">Bearbeiten</button>
                     <button class="btn sm danger" onclick="App.deleteBackend(${b.id})">Löschen</button>
@@ -901,6 +969,12 @@
       <p class="muted">SSL ohne „Zert. prüfen“ verschlüsselt die Verbindung, prüft das
         Server-Zertifikat aber nicht (<code>verify none</code>). Mit „Zert. prüfen“ werden
         System-CAs und Hostname geprüft – dafür muss der Host ein DNS-Name sein (HAProxy ≥ 2.6).</p>
+      <h4>Zertifikate (SNI)</h4>
+      ${certRowsEditor(
+        "be-cert-rows",
+        "SSL-Frontends, die auf dieses Backend weiterleiten (Default-Backend oder use_backend-Regel), " +
+          "laden diese Zertifikate automatisch und liefern sie passend zum Hostnamen (SNI) aus."
+      )}
       <h4>Zusätzliche Zeilen</h4>
       <textarea name="extra" rows="2" placeholder="z. B. option forwardfor">${esc(
         b ? b.extra : ""
@@ -909,6 +983,7 @@
     const srvBody = $("#srv-rows", form);
     (b ? b.servers : []).forEach((s) => srvBody.insertAdjacentHTML("beforeend", serverRow(s)));
     if (!b || !b.servers.length) srvBody.innerHTML = serverRow();
+    initCertRows(form, "be-cert-rows", b ? b.cert_ids : []);
     $("#add-srv", form).onclick = () => srvBody.insertAdjacentHTML("beforeend", serverRow());
     srvBody.addEventListener("change", (e) => {
       if (!e.target.classList.contains("srv-ssl")) return;
@@ -942,6 +1017,7 @@
         check_expect: fd.get("check_expect").trim(),
         extra: fd.get("extra") || "",
         servers,
+        cert_ids: selectedCertIds(form, "be-cert-rows"),
       };
       try {
         if (b) await api(`/api/backends/${b.id}`, "PUT", body);
@@ -978,7 +1054,7 @@
         <span class="muted">– global für alle Zertifikate</span></div>` +
       (state.certs.length
         ? `<div class="card"><table class="data">
-        <thead><tr><th>Name</th><th>Domains</th><th>Provider</th><th>Status</th><th>Gültig bis</th><th class="c">Auto-Renew</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Domains</th><th>Provider</th><th>Status</th><th>Gültig bis</th><th>Verwendet in</th><th class="c">Auto-Renew</th><th></th></tr></thead>
         <tbody>
           ${state.certs
             .map((c) => {
@@ -995,6 +1071,7 @@
               <td>${esc((state.providers[c.dns_provider] || {}).label || c.dns_provider)}</td>
               <td>${statusBadge(c.status)}${c.message ? `<div class="error-text" style="font-size:11px">${esc(c.message.slice(0, 300))}</div>` : ""}</td>
               <td>${expiry}</td>
+              <td>${(c.used_by || []).length ? esc(certUsageText(c.used_by)) : '<span class="muted">–</span>'}</td>
               <td class="c"><input type="checkbox" ${c.auto_renew ? "checked" : ""}
                 onchange="App.toggleAutoRenew(${c.id}, this.checked)" ${c.dns_provider === "manual" ? "disabled" : ""}></td>
               <td>
@@ -1194,10 +1271,17 @@
     }
   };
 
-  App.deleteCert = (id, name) =>
-    confirmModal(`Zertifikat <b>${esc(name)}</b> wirklich löschen?`, async () =>
-      api(`/api/certificates/${id}`, "DELETE")
+  App.deleteCert = (id, name) => {
+    const cert = state.certs.find((c) => c.id === id);
+    const usage = cert ? certUsageText(cert.used_by) : "";
+    confirmModal(
+      `Zertifikat <b>${esc(name)}</b> wirklich löschen?` +
+        (usage
+          ? `<br><span class="error-text">Noch zugeordnet: ${esc(usage)}. Diese Zuordnungen werden entfernt.</span>`
+          : ""),
+      async () => api(`/api/certificates/${id}`, "DELETE")
     );
+  };
 
   // ---------------- Config & Deploy ----------------
   routes.deploy = async function (el) {

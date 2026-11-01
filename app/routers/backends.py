@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from .. import auth, db as dbmod
 from ..db import audit
+from ..services import certmap
 from ..services import validate as v
 
 router = APIRouter(prefix="/api/backends", tags=["backends"])
@@ -31,6 +32,9 @@ class BackendIn(BaseModel):
     check_expect: str = ""
     extra: str = ""
     servers: list[ServerIn] = []
+    # Werden von SSL-Frontends geladen, die auf dieses Backend weiterleiten.
+    # None lässt die Zuordnung beim Bearbeiten unverändert.
+    cert_ids: list[int] | None = None
 
 
 def _insert_servers(backend_id, servers):
@@ -63,6 +67,30 @@ def _validate(body: BackendIn):
         raise HTTPException(400, str(exc)) from exc
 
 
+def _validate_certs(body: BackendIn, bid: int | None = None):
+    if body.cert_ids is None:
+        cert_ids = certmap.backend_cert_ids().get(bid, []) if bid else []
+    else:
+        cert_ids = certmap.unique_ids(body.cert_ids)
+    known_certs = {row["id"] for row in dbmod.q("SELECT id FROM certificates")}
+    if any(cert_id not in known_certs for cert_id in cert_ids):
+        raise HTTPException(400, "Zertifikat nicht gefunden")
+    if len(cert_ids) > certmap.MAX_FRONTEND_CERTS:
+        raise HTTPException(
+            400, f"Maximal {certmap.MAX_FRONTEND_CERTS} Zertifikate je Backend möglich"
+        )
+    # Vor der Folgenprüfung, die eindeutige Backend-Namen voraussetzt.
+    if dbmod.one(
+        "SELECT id FROM backends WHERE cluster_id = ? AND name = ? AND id != ?",
+        (body.cluster_id, body.name, bid or 0),
+    ):
+        raise HTTPException(400, "Backend- oder Server-Name existiert bereits")
+    problems = certmap.backend_change_problems(bid, body.cluster_id, body.name, cert_ids)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    return cert_ids
+
+
 @router.get("")
 def list_backends(cluster_id: int | None = None):
     if cluster_id:
@@ -71,16 +99,19 @@ def list_backends(cluster_id: int | None = None):
         )
     else:
         backends = dbmod.q("SELECT * FROM backends ORDER BY name")
+    backend_certs = certmap.backend_cert_ids(cluster_id or None)
     for b in backends:
         b["servers"] = dbmod.q(
             "SELECT * FROM servers WHERE backend_id = ? ORDER BY name", (b["id"],)
         )
+        b["cert_ids"] = backend_certs.get(b["id"], [])
     return backends
 
 
 @router.post("")
 def create_backend(body: BackendIn, user=Depends(auth.require_auth)):
     _validate(body)
+    cert_ids = _validate_certs(body)
     try:
         bid = dbmod.execute(
             "INSERT INTO backends (cluster_id, name, mode, balance, check_path,"
@@ -93,6 +124,7 @@ def create_backend(body: BackendIn, user=Depends(auth.require_auth)):
         _insert_servers(bid, body.servers)
     except sqlite3.IntegrityError:
         raise HTTPException(400, "Backend- oder Server-Name existiert bereits")
+    certmap.save_backend_certs(bid, cert_ids)
     audit(user["username"], "backend.create", body.name)
     return {"id": bid}
 
@@ -102,6 +134,7 @@ def update_backend(bid: int, body: BackendIn, user=Depends(auth.require_auth)):
     if not dbmod.one("SELECT id FROM backends WHERE id = ?", (bid,)):
         raise HTTPException(404, "Backend nicht gefunden")
     _validate(body)
+    cert_ids = _validate_certs(body, bid)
     try:
         dbmod.execute(
             "UPDATE backends SET cluster_id=?, name=?, mode=?, balance=?,"
@@ -115,6 +148,7 @@ def update_backend(bid: int, body: BackendIn, user=Depends(auth.require_auth)):
         _insert_servers(bid, body.servers)
     except sqlite3.IntegrityError:
         raise HTTPException(400, "Backend- oder Server-Name existiert bereits")
+    certmap.save_backend_certs(bid, cert_ids)
     audit(user["username"], "backend.update", body.name)
     return {"ok": True}
 
