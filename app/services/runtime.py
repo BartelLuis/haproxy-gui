@@ -89,6 +89,14 @@ def show_info(node):
     return info
 
 
+STAT_TYPE_NAMES = {"0": "frontend", "1": "backend", "2": "server", "3": "listener"}
+NO_STAT_DATA = "Runtime-Socket lieferte keine Statistikdaten"
+
+
+class RuntimeResponseError(RuntimeError):
+    """Der Runtime-Socket hat geantwortet, aber nicht im erwarteten Format."""
+
+
 def show_stat(node):
     text = runtime_cmd(node, "show stat")
     rows = []
@@ -101,7 +109,12 @@ def show_stat(node):
             headers[0] = headers[0].lstrip("#").strip()
             continue
         if headers and len(row) >= len(headers):
-            rows.append(dict(zip(headers, row)))
+            entry = dict(zip(headers, row))
+            # HAProxy liefert den Typ im CSV numerisch (0=frontend, 1=backend, ...)
+            entry["type_name"] = STAT_TYPE_NAMES.get(entry.get("type", "").strip(), "")
+            rows.append(entry)
+    if headers is None:
+        raise RuntimeResponseError(NO_STAT_DATA)
     return rows
 
 
@@ -109,7 +122,11 @@ def set_server_state(node, backend, server, state):
     backend = _sanitize_token(backend)
     server = _sanitize_token(server)
     state = _sanitize_token(state)
-    return runtime_cmd(node, f"set server {backend}/{server} state {state}")
+    out = runtime_cmd(node, f"set server {backend}/{server} state {state}")
+    # HAProxy antwortet bei Erfolg leer; Text bedeutet z. B. "Permission denied".
+    if out.strip():
+        raise RuntimeResponseError(out.strip().splitlines()[0][:200])
+    return out
 
 
 def sanitize_token(value):
