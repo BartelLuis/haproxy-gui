@@ -552,9 +552,14 @@ def deploy_cert(cert_id):
                         "log": log,
                     }
                 )
-            except Exception as exc:
+            except Exception:
                 results.append(
-                    {"node": node["name"], "ok": False, "error": str(exc), "log": log}
+                    {
+                        "node": node["name"],
+                        "ok": False,
+                        "error": "Interner Fehler bei der Bereitstellung",
+                        "log": log,
+                    }
                 )
     return results
 
