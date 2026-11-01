@@ -41,12 +41,18 @@ CREATE TABLE IF NOT EXISTS certificates (
     domains TEXT NOT NULL,
     email TEXT DEFAULT '',
     dns_provider TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'acme',
     provider_config TEXT DEFAULT '{}',
     auto_renew INTEGER DEFAULT 1,
     status TEXT DEFAULT 'pending',
     message TEXT DEFAULT '',
     not_after TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS imported_certificates (
+    cert_id INTEGER PRIMARY KEY REFERENCES certificates(id) ON DELETE CASCADE,
+    cert_pem BLOB NOT NULL,
+    key_encrypted TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS backends (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,6 +224,13 @@ def execute(sql, args=()):
 def init_db():
     db = get_db()
     db.executescript(SCHEMA)
+    certificate_columns = {
+        row["name"] for row in db.execute("PRAGMA table_info(certificates)").fetchall()
+    }
+    if "source" not in certificate_columns:
+        db.execute(
+            "ALTER TABLE certificates ADD COLUMN source TEXT NOT NULL DEFAULT 'acme'"
+        )
     frontend_columns = {
         row["name"] for row in db.execute("PRAGMA table_info(frontends)").fetchall()
     }

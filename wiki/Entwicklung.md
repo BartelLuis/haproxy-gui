@@ -27,6 +27,7 @@ python -m pytest tests/ -v
 - `test_auth.py` – Passwörter, Tokens, Rollen, API-Tokens
 - `test_configgen.py` – Config-Generierung (inkl. Validierung)
 - `test_certmap.py` – Zuordnung mehrerer Zertifikate zu Frontends und Backends (SNI)
+- `test_cert_import.py` – PEM/PFX-Import, Validierung, verschlüsselte Speicherung und Ersetzen
 - `test_services.py` – Keepalived, Alerts, Metriken, LDAP, Zertifikate
 - `test_api.py` – Integrationstests gegen einen echten Server-Prozess
 

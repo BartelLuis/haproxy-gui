@@ -1044,20 +1044,22 @@
       api("/api/acme/settings"),
     ]);
     el.innerHTML =
-      `<div class="page-head"><h2>Zertifikate (Let's Encrypt, DNS-01)</h2>
+      `<div class="page-head"><h2>Zertifikate</h2>
         <div>${state.user && state.user.role === "admin"
           ? '<button class="btn" onclick="App.editAcmeSettings()">DNS-Server</button> '
           : ""}
-        <button class="btn primary" onclick="App.editCert()">+ Neues Zertifikat</button></div></div>
+        <button class="btn" onclick="App.importCert()">Importieren</button>
+        <button class="btn primary" onclick="App.editCert()">+ Let's Encrypt</button></div></div>
       <div class="card"><strong>ACME-DNS-Server:</strong>
         ${esc(state.acmeSettings.dns_resolvers.join(", ") || "System-DNS-Server")}
-        <span class="muted">– global für alle Zertifikate</span></div>` +
+        <span class="muted">– für alle Let's-Encrypt-Zertifikate</span></div>` +
       (state.certs.length
         ? `<div class="card"><table class="data">
-        <thead><tr><th>Name</th><th>Domains</th><th>Provider</th><th>Status</th><th>Gültig bis</th><th>Verwendet in</th><th class="c">Auto-Renew</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Domains</th><th>Quelle / Provider</th><th>Status</th><th>Gültig bis</th><th>Verwendet in</th><th class="c">Auto-Renew</th><th></th></tr></thead>
         <tbody>
           ${state.certs
             .map((c) => {
+              const imported = c.source === "imported";
               let expiry = "-";
               if (c.not_after) {
                 const days = Math.floor((new Date(c.not_after) - Date.now()) / 86400000);
@@ -1068,15 +1070,18 @@
             <tr>
               <td>${esc(c.name)}</td>
               <td>${esc(c.domains.join(", "))}</td>
-              <td>${esc((state.providers[c.dns_provider] || {}).label || c.dns_provider)}</td>
+              <td>${imported ? "Manuell importiert" : esc((state.providers[c.dns_provider] || {}).label || c.dns_provider)}</td>
               <td>${statusBadge(c.status)}${c.message ? `<div class="error-text" style="font-size:11px">${esc(c.message.slice(0, 300))}</div>` : ""}</td>
               <td>${expiry}</td>
               <td>${(c.used_by || []).length ? esc(certUsageText(c.used_by)) : '<span class="muted">–</span>'}</td>
               <td class="c"><input type="checkbox" ${c.auto_renew ? "checked" : ""}
-                onchange="App.toggleAutoRenew(${c.id}, this.checked)" ${c.dns_provider === "manual" ? "disabled" : ""}></td>
+                onchange="App.toggleAutoRenew(${c.id}, this.checked)"
+                ${imported ? 'disabled title="Importierte Zertifikate manuell ersetzen"' : c.dns_provider === "manual" ? "disabled" : ""}></td>
               <td>
                 ${c.status === "waiting_dns" ? `<button class="btn sm warn" onclick="App.showChallenge(${c.id})">TXT anzeigen</button>` : ""}
-                <button class="btn sm" onclick="App.renewCert(${c.id})" ${c.dns_provider === "manual" ? "disabled title='Manuelles DNS: neu ausstellen'" : ""}>Erneuern</button>
+                ${imported
+                  ? `<button class="btn sm" onclick="App.importCert(${c.id})">Ersetzen</button>`
+                  : `<button class="btn sm" onclick="App.renewCert(${c.id})" ${c.dns_provider === "manual" ? "disabled title='Manuelles DNS: neu ausstellen'" : ""}>Erneuern</button>`}
                 <button class="btn sm" onclick="App.deployCert(${c.id})">Verteilen</button>
                 <button class="btn sm danger" onclick="App.deleteCert(${c.id}, '${js(c.name)}')">Löschen</button>
               </td>
@@ -1171,6 +1176,102 @@
         router();
       } catch (err) {
         toast(err.message, "err");
+      }
+    };
+  };
+
+  App.importCert = function (id) {
+    const cert = id ? state.certs.find((c) => c.id === id) : null;
+    const fields = [
+      ["certificate_pem", "Zertifikat / Fullchain", ".pem,.crt,.cer", 4],
+      ["private_key_pem", "Privater Schlüssel (entfällt bei kombiniertem PEM)", ".pem,.key", 3],
+      ["chain_pem", "Zusätzliche Zwischenzertifikate (optional)", ".pem,.crt,.cer", 3],
+    ];
+    const { close, form } = openModal(
+      cert ? `Zertifikat ersetzen: ${cert.name}` : "Zertifikat importieren",
+      `<label>Name (intern)<input name="name" required value="${esc(cert ? cert.name : "")}"
+        ${cert ? "readonly" : ""} placeholder="example-com"></label>
+      <label>Format<select name="format" id="cert-import-format">
+        <option value="pem">PEM (.pem/.crt und .key)</option>
+        <option value="pkcs12">PFX / PKCS#12 (.pfx/.p12)</option>
+      </select></label>
+      <div id="cert-import-pem">
+        <p class="muted">Je Feld eine Datei auswählen oder PEM-Text einfügen, nicht beides.</p>
+        ${fields.map(([name, label, accept, rows]) => `
+          <label>${label}<input type="file" name="${name}_file" accept="${accept}"></label>
+          <textarea name="${name}" rows="${rows}" aria-label="${label}: PEM-Text"
+            placeholder="Alternativ PEM-Text einfügen" spellcheck="false" autocomplete="off"></textarea>
+        `).join("")}
+      </div>
+      <div id="cert-import-pkcs12" class="hidden">
+        <label>PFX/P12-Datei (inkl. privatem Schlüssel)
+          <input type="file" name="pkcs12_file" accept=".pfx,.p12"></label>
+      </div>
+      <label>Passwort (nur bei verschlüsseltem Schlüssel bzw. PFX/P12)
+        <input name="password" type="password" autocomplete="new-password"></label>
+      <p class="muted">Maximal 1 MiB pro Import. Domains und Ablaufdatum werden aus dem Zertifikat gelesen.
+        Das Import-Passwort wird nicht gespeichert. Der Schlüssel wird verschlüsselt in der Datenbank
+        abgelegt und für HAProxy ohne Passwort bereitgestellt.</p>
+      <p class="muted">${cert
+        ? "Name und Frontend-/Backend-Zuordnungen bleiben erhalten. Zum Aktivieren anschließend „Verteilen“ ausführen."
+        : "Nach dem Import einem Frontend oder Backend zuordnen und die Config deployen."}
+        Importierte Zertifikate werden nicht automatisch erneuert.</p>`,
+      cert ? "Ersetzen" : "Importieren"
+    );
+    const selectFormat = () => {
+      const pem = $("#cert-import-format", form).value === "pem";
+      $("#cert-import-pem", form).classList.toggle("hidden", !pem);
+      $("#cert-import-pkcs12", form).classList.toggle("hidden", pem);
+      $$("input, textarea", $("#cert-import-pem", form)).forEach((input) => {
+        input.disabled = !pem;
+      });
+      const pfx = $('[name="pkcs12_file"]', form);
+      pfx.disabled = pem;
+      pfx.required = !pem;
+    };
+    $("#cert-import-format", form).onchange = selectFormat;
+    selectFormat();
+    const checkFile = (file) => {
+      if (file.size > 1024 * 1024) throw new Error("Datei darf höchstens 1 MiB groß sein");
+    };
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const submit = $('button[type="submit"]', form);
+      submit.disabled = true;
+      try {
+        const fd = new FormData(form);
+        const body = { format: fd.get("format"), password: fd.get("password") };
+        if (!cert) body.name = fd.get("name").trim();
+        if (body.format === "pem") {
+          for (const [name, label] of fields) {
+            const file = $(`[name="${name}_file"]`, form).files[0];
+            const text = String(fd.get(name) || "").trim();
+            if (file && text) throw new Error(`${label}: Bitte Datei oder Text verwenden, nicht beides`);
+            if (file) checkFile(file);
+            body[name] = file ? await file.text() : text;
+          }
+        } else {
+          const file = $('[name="pkcs12_file"]', form).files[0];
+          if (!file) throw new Error("Bitte eine PFX/P12-Datei auswählen");
+          checkFile(file);
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          let binary = "";
+          for (let i = 0; i < bytes.length; i += 32768) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+          }
+          body.pkcs12_base64 = btoa(binary);
+        }
+        await api(cert ? `/api/certificates/${cert.id}/import` : "/api/certificates/import",
+          cert ? "PUT" : "POST", body);
+        close();
+        toast(cert
+          ? "Zertifikat ersetzt – zum Aktivieren bitte „Verteilen“ ausführen"
+          : "Zertifikat importiert – jetzt zuordnen und deployen");
+        router();
+      } catch (err) {
+        toast(err.message, "err");
+      } finally {
+        submit.disabled = false;
       }
     };
   };

@@ -339,3 +339,41 @@ def test_unused_certificate_is_not_deployed(env, remote_certificate):
     assert result["ok"] is True
     assert "nichts zu tun" in result["log"][0]
     assert case["events"] == []
+
+
+@pytest.mark.parametrize("entrypoint", ["certificate", "configuration"])
+@pytest.mark.parametrize("assignment", ["frontend", "backend"])
+def test_imported_certificate_is_deployed_with_chain_and_private_key(
+    env, remote_certificate, certificate_factory, entrypoint, assignment
+):
+    from app.routers import certs as router
+    from app.services import certmap
+
+    case = remote_certificate
+    issuer = certificate_factory(("issuer.test",), is_ca=True)
+    leaf = certificate_factory(issuer=issuer)
+    case["cert_id"] = router.import_cert(router.CertImportIn(
+        name="imported-demo", certificate_pem=leaf["certificate_pem"],
+        private_key_pem=leaf["private_key_pem"], chain_pem=issuer["certificate_pem"],
+    ), {"username": "import-test"})["id"]
+    db = env["db"]
+    fid = db.one("SELECT id FROM frontends WHERE name = 'https'")["id"]
+    if assignment == "frontend":
+        certmap.save_frontend_certs(fid, [case["cert_id"]])
+    else:
+        bid = db.execute(
+            "INSERT INTO backends (cluster_id, name) VALUES (?, 'import-backend')",
+            (case["cluster"]["id"],),
+        )
+        certmap.save_backend_certs(bid, [case["cert_id"]])
+        certmap.save_frontend_certs(fid, [])
+        db.execute("UPDATE frontends SET default_backend_id = ? WHERE id = ?", (bid, fid))
+    result = _deploy(case, entrypoint)
+    assert result["ok"], result
+    writes = {event[1]: event[2] for event in case["events"] if event[0] == "write"}
+    cert = (leaf["certificate_pem"] + issuer["certificate_pem"]).encode("ascii")
+    key = leaf["private_key_pem"].encode("ascii")
+    assert writes[f"{CERT_DIR}/imported-demo.crt"] == cert
+    assert writes[f"{CERT_DIR}/imported-demo.key"] == key
+    assert writes[f"{CERT_DIR}/imported-demo.pem"] == cert + key
+    assert ("reload", case["node"]["id"]) in case["events"]

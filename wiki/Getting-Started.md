@@ -43,7 +43,7 @@ Fertig – der HAProxy läuft. Unter **Dashboard** siehst du den Live-Status.
 
 ## 6. TLS mit Let's Encrypt (optional)
 
-1. **Zertifikate** → **+ Neues Zertifikat**
+1. **Zertifikate** → **+ Let's Encrypt**
 2. Domains eintragen (z. B. `example.com`, `*.example.com`), DNS-Provider wählen,
    API-Credentials eintragen → Ausstellung läuft automatisch
 3. Ein **SSL-Frontend** (Port 443) anlegen und unter **Zertifikate (SNI)** ein oder
@@ -53,6 +53,18 @@ Fertig – der HAProxy läuft. Unter **Dashboard** siehst du den Live-Status.
 4. Deployen
 
 Details und alle DNS-Provider: siehe Features / Zertifikate.
+
+### Vorhandene Zertifikate verwenden
+
+Statt Let's Encrypt kannst du unter **Zertifikate → Importieren** vorhandene
+PEM-Dateien (Zertifikat/Fullchain und privater Schlüssel) oder eine PFX/P12-Datei
+hochladen. PEM-Text kann alternativ eingefügt werden; bei verschlüsseltem Material
+das Passwort angeben. Domains und Ablaufdatum werden automatisch erkannt.
+Anschließend wie oben einem Frontend oder Backend zuordnen und deployen.
+
+Importierte Zertifikate haben kein Auto-Renew. Über **Ersetzen** kannst du eine neue
+Version importieren, ohne Zuordnungen zu verlieren. **Verteilen** muss danach separat
+ausgeführt werden, damit HAProxy die neue Version verwendet.
 
 ## Nächste Schritte
 

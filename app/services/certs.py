@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from cryptography import x509
 
-from .. import db as dbmod
+from .. import auth, db as dbmod
 from . import certmap
 from . import validate as v
 
@@ -136,8 +136,29 @@ def cert_paths(cert):
     )
 
 
+def _imported_bytes(cert):
+    material = dbmod.one(
+        "SELECT cert_pem, key_encrypted FROM imported_certificates WHERE cert_id = ?",
+        (cert["id"],),
+    )
+    if not material:
+        return None, None
+    encrypted = material["key_encrypted"]
+    key = auth.decrypt_secret(encrypted) if encrypted.startswith("enc:") else ""
+    return material["cert_pem"], key.encode("utf-8") if key else None
+
+
+def certificate_bytes(cert):
+    """Liest Zertifikat und Schlüssel eines Imports aus derselben DB-Version."""
+    if cert.get("source") == "imported":
+        return _imported_bytes(cert)
+    return pem_bytes(cert), key_bytes(cert)
+
+
 def pem_bytes(cert):
     """Zertifikatsbundle ohne Key: Leaf + Intermediate/Chain, wie HAProxy für crt erwartet."""
+    if cert.get("source") == "imported":
+        return _imported_bytes(cert)[0]
     cert_dir = os.path.join(ACME_DIR, "certificates")
     base = _base(cert)
     name = (cert.get("name") or "").strip()
@@ -177,6 +198,8 @@ def pem_bytes(cert):
 
 def key_bytes(cert):
     """Privater Schlüssel für das Zertifikat; separat auf dem Zielhost installieren."""
+    if cert.get("source") == "imported":
+        return _imported_bytes(cert)[1]
     cert_dir = os.path.join(ACME_DIR, "certificates")
     base = _base(cert)
     name = (cert.get("name") or "").strip()
@@ -201,19 +224,24 @@ def cluster_cert_files(cluster_id):
     ]
     files, warnings = {}, []
     for cert in rows:
-        crt = pem_bytes(cert)
-        k = key_bytes(cert)
+        crt, k = certificate_bytes(cert)
         if crt and k:
             files[cert["name"] + ".crt"] = crt
             files[cert["name"] + ".key"] = k
         else:
             warnings.append(
-                f"Zertifikat '{cert['name']}' ist noch nicht ausgestellt"
+                f"Zertifikat '{cert['name']}': importiertes Zertifikat oder Schlüssel"
+                " fehlt oder ist nicht entschlüsselbar"
+                if cert.get("source") == "imported"
+                else f"Zertifikat '{cert['name']}' ist noch nicht ausgestellt"
             )
     return files, warnings
 
 
 def remove_cert_files(cert):
+    if cert.get("source") == "imported":
+        # Importiertes Schlüsselmaterial wird mit dem DB-Eintrag gelöscht.
+        return
     cert_dir = os.path.join(ACME_DIR, "certificates")
     for suffix in (".crt", ".key", ".issuer.crt", ".json"):
         path = _safe_path(cert_dir, _base(cert) + suffix)
@@ -425,6 +453,8 @@ def issue(cert_id, renew=False):
     cert = dbmod.one("SELECT * FROM certificates WHERE id = ?", (cert_id,))
     if not cert:
         return
+    if cert.get("source") == "imported":
+        raise ValueError("Importierte Zertifikate müssen durch einen neuen Import ersetzt werden")
     provider = cert["dns_provider"]
     domains = json.loads(cert["domains"])
     try:
@@ -498,14 +528,17 @@ def deploy_cert(cert_id):
     cert = dbmod.one("SELECT * FROM certificates WHERE id = ?", (cert_id,))
     if not cert:
         return []
-    pem = pem_bytes(cert)
-    key = key_bytes(cert)
+    pem, key = certificate_bytes(cert)
     if not pem or not key:
         return [
             {
                 "node": "-",
                 "ok": False,
-                "error": "Zertifikat ist noch nicht ausgestellt",
+                "error": (
+                    "Importiertes Zertifikat oder Schlüssel fehlt oder ist nicht entschlüsselbar"
+                    if cert.get("source") == "imported"
+                    else "Zertifikat ist noch nicht ausgestellt"
+                ),
                 "log": [],
             }
         ]
@@ -572,7 +605,7 @@ async def renewal_loop():
         try:
             certs = dbmod.q(
                 "SELECT * FROM certificates WHERE auto_renew = 1 AND status = 'active'"
-                " AND dns_provider != 'manual'"
+                " AND source = 'acme' AND dns_provider != 'manual'"
             )
             for cert in certs:
                 try:
