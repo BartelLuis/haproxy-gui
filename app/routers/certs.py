@@ -20,6 +20,25 @@ class CertIn(BaseModel):
     auto_renew: bool = True
 
 
+class AcmeSettingsIn(BaseModel):
+    dns_resolvers: list[str]
+
+
+@router.get("/acme/settings")
+def get_acme_settings():
+    return certsvc.get_acme_settings()
+
+
+@router.put("/acme/settings")
+def put_acme_settings(body: AcmeSettingsIn, user=Depends(auth.require_role("admin"))):
+    try:
+        certsvc.save_acme_settings(body.dns_resolvers)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    audit(user["username"], "acme.settings", ", ".join(body.dns_resolvers))
+    return {"ok": True}
+
+
 @router.get("/dns-providers")
 def dns_providers():
     return certsvc.providers_public()

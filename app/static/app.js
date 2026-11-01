@@ -949,13 +949,20 @@
 
   // ---------------- Zertifikate ----------------
   routes.certs = async function (el) {
-    [state.certs, state.providers] = await Promise.all([
+    [state.certs, state.providers, state.acmeSettings] = await Promise.all([
       api("/api/certificates"),
       api("/api/dns-providers"),
+      api("/api/acme/settings"),
     ]);
     el.innerHTML =
       `<div class="page-head"><h2>Zertifikate (Let's Encrypt, DNS-01)</h2>
-        <button class="btn primary" onclick="App.editCert()">+ Neues Zertifikat</button></div>` +
+        <div>${state.user && state.user.role === "admin"
+          ? '<button class="btn" onclick="App.editAcmeSettings()">DNS-Server</button> '
+          : ""}
+        <button class="btn primary" onclick="App.editCert()">+ Neues Zertifikat</button></div></div>
+      <div class="card"><strong>ACME-DNS-Server:</strong>
+        ${esc(state.acmeSettings.dns_resolvers.join(", ") || "System-DNS-Server")}
+        <span class="muted">– global für alle Zertifikate</span></div>` +
       (state.certs.length
         ? `<div class="card"><table class="data">
         <thead><tr><th>Name</th><th>Domains</th><th>Provider</th><th>Status</th><th>Gültig bis</th><th class="c">Auto-Renew</th><th></th></tr></thead>
@@ -993,6 +1000,34 @@
         if ((location.hash || "").includes("certs")) router();
       }, 4000);
     }
+  };
+
+  App.editAcmeSettings = function () {
+    const { close, form } = openModal(
+      "DNS-Server für ACME",
+      `<label>DNS-Server (einer pro Zeile)
+        <textarea name="dns_resolvers" rows="4" placeholder="9.9.9.9&#10;1.1.1.1">${esc(
+          state.acmeSettings.dns_resolvers.join("\n")
+        )}</textarea></label>
+      <p class="muted">IPv4 oder IPv6, optional mit Port, z. B. 9.9.9.9:53 oder
+        [2620:fe::fe]:53. Auch Leerzeichen, Kommas und Semikolons sind als Trennzeichen möglich.</p>
+      <p class="muted">Leer lassen für die System-DNS-Server. Änderungen gelten ab der nächsten
+        Ausstellung oder Erneuerung, auch bei manuellem DNS.</p>
+      <p class="muted">Die Resolver werden für rekursive DNS-Abfragen von lego verwendet.
+        Autoritative DNS-Prüfungen und die Validierung durch Let's Encrypt bleiben unverändert.</p>`
+    );
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const dns_resolvers = new FormData(form).get("dns_resolvers").split(/[\s,;]+/).filter(Boolean);
+      try {
+        await api("/api/acme/settings", "PUT", { dns_resolvers });
+        close();
+        toast("DNS-Server gespeichert");
+        router();
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    };
   };
 
   App.editCert = function () {

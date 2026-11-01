@@ -34,11 +34,22 @@ Alle Endpunkte unter `/api`. Authentifizierung per `Authorization: Bearer hg_<to
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
 | GET | `/api/dns-providers` | Verfügbare DNS-Provider |
+| GET | `/api/acme/settings` | Globale DNS-Resolver lesen (viewer+) |
+| PUT | `/api/acme/settings` | Globale DNS-Resolver ändern (nur admin), `{dns_resolvers: [...]}` |
 | GET/POST/DELETE | `/api/certificates[/{id}]` | Zertifikate (Let's Encrypt DNS-01) |
 | POST | `/api/certificates/{id}/renew` | Erneuern |
 | POST | `/api/certificates/{id}/deploy` | Auf Nodes verteilen |
 | GET | `/api/certificates/{id}/challenge` | Manuelle DNS-Challenge lesen |
 | POST | `/api/certificates/{id}/confirm` | Manuelle DNS bestätigen |
+
+`dns_resolvers` ist eine Liste von IPv4-/IPv6-Adressen mit optionalem Port,
+z. B. `{"dns_resolvers": ["9.9.9.9", "1.1.1.1", "[2620:fe::fe]:53"]}`.
+Ohne gespeicherte Einstellung gelten `9.9.9.9:53` und `1.1.1.1:53`.
+Die API ergänzt Port `53`, normalisiert IP-Adressen und entfernt doppelte Einträge.
+Eine leere Liste nutzt wieder die Standard-Resolver von lego. Änderungen werden
+dauerhaft gespeichert und gelten für die nächste Ausstellung oder Erneuerung,
+auch bei manuellem DNS; ungültige Adressen oder Ports werden zurückgewiesen.
+Die autoritativen DNS-Prüfungen und die Validierung durch Let's Encrypt bleiben unverändert.
 
 ## Monitoring & Runtime
 

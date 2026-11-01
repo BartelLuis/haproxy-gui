@@ -1,5 +1,9 @@
 import importlib
+import json
 import smtplib
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -386,3 +390,163 @@ def test_manual_challenge_flow(env):
     assert ok
     assert certsvc.get_pending_challenge(cert) is None  # Confirm-Datei existiert → fertig
     certsvc._cleanup_manual(cert)
+
+
+@pytest.fixture()
+def acme(env):
+    import app.services.certs as certsvc
+
+    return importlib.reload(certsvc)
+
+
+@pytest.mark.parametrize(("value", "expected"), [
+    ("9.9.9.9", "9.9.9.9:53"),
+    (" 1.1.1.1:5353 ", "1.1.1.1:5353"),
+    ("9.9.9.9:1", "9.9.9.9:1"),
+    ("9.9.9.9:65535", "9.9.9.9:65535"),
+    ("2620:FE:0:0:0:0:0:FE", "[2620:fe::fe]:53"),
+    ("[2620:fe::fe]", "[2620:fe::fe]:53"),
+    ("[2620:fe::fe]:5353", "[2620:fe::fe]:5353"),
+])
+def test_dns_resolver_validation(value, expected):
+    from app.services import validate
+
+    assert validate.clean_dns_resolvers([value]) == [expected]
+
+
+@pytest.mark.parametrize("values", [
+    None, "9.9.9.9", [None], [53], [""], ["dns.example.com"],
+    ["999.9.9.9"], ["https://9.9.9.9"], ["9.9.9.9:0"],
+    ["9.9.9.9:65536"], ["9.9.9.9:"], ["9.9.9.9:abc"],
+    ["[2620:fe::fe"], ["[9.9.9.9]:53"], ["[2620:fe::fe]:0"],
+    ["[fe80::1%eth0]:53"], ["9.9.9.9;touch /tmp/x"], ["--dns.disable-cp"],
+])
+def test_dns_resolver_validation_rejects_invalid_values(values):
+    from app.services import validate
+
+    with pytest.raises(ValueError, match="DNS-Server"):
+        validate.clean_dns_resolvers(values)
+
+
+def test_acme_settings_defaults_and_persistence(env, acme):
+    defaults = {"dns_resolvers": ["9.9.9.9:53", "1.1.1.1:53"]}
+    assert acme.get_acme_settings() == defaults
+    acme.get_acme_settings()["dns_resolvers"].clear()
+    assert acme.get_acme_settings() == defaults
+
+    acme.save_acme_settings(["1.1.1.1", "1.1.1.1:53", "2620:fe::fe", "9.9.9.9:5353"])
+    expected = {"dns_resolvers": ["1.1.1.1:53", "[2620:fe::fe]:53", "9.9.9.9:5353"]}
+    row = env["db"].one("SELECT value FROM alert_state WHERE key = 'acme_settings'")
+    assert row is not None
+    assert json.loads(row["value"]) == expected
+    env["db"].init_db()
+    importlib.reload(acme)
+    assert acme.get_acme_settings() == expected
+
+    with pytest.raises(ValueError, match="DNS-Server"):
+        acme.save_acme_settings(["8.8.8.8", "invalid"])
+    assert acme.get_acme_settings() == expected
+
+    acme.save_acme_settings([])
+    importlib.reload(acme)
+    assert acme.get_acme_settings() == {"dns_resolvers": []}
+
+
+@pytest.mark.parametrize("provider", ["cloudflare", "technitium", "manual"])
+@pytest.mark.parametrize(("renew", "existing_cert"), [(False, False), (True, True), (True, False)])
+@pytest.mark.parametrize(("resolvers", "expected"), [
+    (None, ["9.9.9.9:53", "1.1.1.1:53"]),
+    ([], []),
+    (["9.9.9.9:5353", "2620:fe::fe"], ["9.9.9.9:5353", "[2620:fe::fe]:53"]),
+])
+def test_acme_uses_dns_resolvers_for_all_issuance_paths(
+    env, acme, monkeypatch, provider, renew, existing_cert, resolvers, expected
+):
+    if resolvers is not None:
+        acme.save_acme_settings(resolvers)
+    config = {
+        "CLOUDFLARE_DNS_API_TOKEN": "test-token",
+        "TECHNITIUM_SERVER": "http://192.0.2.1:5380",
+        "TECHNITIUM_TOKEN": "test-token",
+    }
+    db = env["db"]
+    cid = db.execute(
+        "INSERT INTO certificates (name, domains, email, dns_provider, provider_config)"
+        " VALUES (?, ?, ?, ?, ?)",
+        ("dns-test", '["example.com", "*.example.com"]', "admin@example.com",
+         provider, json.dumps(config)),
+    )
+    cert = db.one("SELECT * FROM certificates WHERE id = ?", (cid,))
+    assert cert is not None
+    crt = Path(acme.cert_paths(cert)[0])
+    crt.parent.mkdir(parents=True, exist_ok=True)
+    if existing_cert:
+        crt.write_bytes(b"existing certificate")
+    calls = []
+    deployed = []
+    expiry = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+    def fake_lego(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        crt.write_bytes(b"issued certificate")
+        return SimpleNamespace(returncode=0, stdout="", stderr="", wait=lambda timeout: 0)
+
+    monkeypatch.setattr(acme.subprocess, "run", fake_lego)
+    monkeypatch.setattr(acme.subprocess, "Popen", fake_lego)
+    monkeypatch.setattr(
+        acme.x509, "load_pem_x509_certificate",
+        lambda data: SimpleNamespace(not_valid_after_utc=expiry),
+    )
+    monkeypatch.setattr(acme, "deploy_cert", deployed.append)
+
+    acme.issue(cid, renew=renew)
+
+    assert len(calls) == 1
+    cmd, kwargs = calls[0]
+    resolver_indices = [i for i, arg in enumerate(cmd) if arg == "--dns.resolvers"]
+    assert [cmd[i + 1] for i in resolver_indices] == expected
+    assert all(i + 1 < len(cmd) - 1 for i in resolver_indices)
+    assert cmd[-1] == ("renew" if renew and existing_cert else "run")
+    assert cmd[cmd.index("--dns") + 1] == ("cloudflare" if provider == "cloudflare" else "exec")
+    assert [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--domains"] == [
+        "example.com", "*.example.com"
+    ]
+    assert "--dns.disable-cp" not in cmd
+    assert "--dns.propagation-disable-ans" not in cmd
+    if provider == "cloudflare":
+        assert kwargs["env"]["CLOUDFLARE_DNS_API_TOKEN"] == "test-token"
+    else:
+        assert kwargs["env"]["EXEC_PATH"]
+    issued = db.one("SELECT * FROM certificates WHERE id = ?", (cid,))
+    assert issued is not None
+    assert issued["status"] == "active"
+    assert issued["not_after"] == expiry.isoformat()
+    assert deployed == [cid]
+
+
+@pytest.mark.parametrize("provider", ["cloudflare", "manual"])
+@pytest.mark.parametrize("settings", [
+    "{", "[]", "{}", '{"dns_resolvers": null}', '{"dns_resolvers": ["invalid"]}',
+])
+def test_invalid_stored_acme_settings_fail_before_starting_lego(
+    env, acme, monkeypatch, provider, settings
+):
+    db = env["db"]
+    db.execute(
+        "INSERT INTO alert_state (key, value) VALUES ('acme_settings', ?)", (settings,)
+    )
+    cid = db.execute(
+        "INSERT INTO certificates (name, domains, dns_provider) VALUES (?, ?, ?)",
+        ("invalid-dns", '["example.com"]', provider),
+    )
+
+    def unexpected_process(*args, **kwargs):
+        pytest.fail("lego must not start with invalid DNS settings")
+
+    monkeypatch.setattr(acme.subprocess, "run", unexpected_process)
+    monkeypatch.setattr(acme.subprocess, "Popen", unexpected_process)
+    acme.issue(cid)
+    cert = db.one("SELECT * FROM certificates WHERE id = ?", (cid,))
+    assert cert is not None
+    assert cert["status"] == "error"
+    assert cert["message"]
