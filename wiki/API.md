@@ -99,8 +99,8 @@ Die autoritativen DNS-Prüfungen und die Validierung durch Let's Encrypt bleiben
 | Methode | Pfad | Beschreibung |
 |---------|------|--------------|
 | GET | `/api/overview` | Cluster + Node-Status |
-| GET | `/api/stats/nodes/{id}/stat` | HAProxy-Statistiken |
-| POST | `/api/stats/nodes/{id}/server-state` | Server ready/drain/maint |
+| GET | `/api/stats/nodes/{id}/stat` | HAProxy-Statistiken (`show stat`-Felder; `type` numerisch, zusätzlich `type_name`: frontend/backend/server/listener) |
+| POST | `/api/stats/nodes/{id}/server-state` | Server ready/drain/maint (502 mit HAProxy-Meldung bei Fehler) |
 | GET | `/api/stats/nodes/{id}/tables` | Stick-Tables |
 | GET/POST | `/api/stats/nodes/{id}/maps…` | Maps lesen/bearbeiten |
 | GET | `/api/logs/nodes/{id}?lines=N` | HAProxy-Logs |

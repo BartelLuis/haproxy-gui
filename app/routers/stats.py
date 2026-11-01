@@ -47,6 +47,8 @@ def node_stat(nid: int):
     try:
         rows = runtimesvc.show_stat(node)
         return {"ok": True, "rows": rows}
+    except runtimesvc.RuntimeResponseError as exc:
+        return {"ok": False, "error": str(exc), "rows": []}
     except Exception:
         return {"ok": False, "error": "Interner Fehler beim Abrufen der Statistiken", "rows": []}
 
@@ -67,6 +69,11 @@ def server_state(nid: int, body: ServerStateIn):
     try:
         out = runtimesvc.set_server_state(node, body.backend, body.server, body.state)
         return {"ok": True, "message": out.strip()}
+    except runtimesvc.RuntimeResponseError as exc:
+        msg = str(exc)
+        if "permission denied" in msg.lower():
+            msg = "Runtime-Socket erlaubt keine Statusänderung (stats socket benötigt level admin)"
+        raise HTTPException(502, msg)
     except Exception as exc:
         raise HTTPException(502, str(exc))
 

@@ -60,10 +60,14 @@
 
   function statusBadge(status) {
     const s = String(status || "").toUpperCase();
+    // HAProxy-Varianten wie "UP 1/3", "DOWN 1/2" oder "MAINT (via b/s)"
+    const head = s.split(/[\s(]/)[0];
     let cls = "muted";
-    if (["UP", "OPEN", "ACTIVE", "READY", "ONLINE"].includes(s)) cls = "ok";
-    else if (["DRAIN", "NOLB", "ISSUING", "PENDING", "WAITING_DNS"].includes(s)) cls = "warn";
-    else if (["DOWN", "MAINT", "ERROR", "OFFLINE"].includes(s)) cls = "err";
+    if (s === "NO CHECK") cls = "ok";
+    else if (head === "UP" && s !== "UP") cls = "warn";
+    else if (["UP", "OPEN", "ACTIVE", "READY", "ONLINE"].includes(head)) cls = "ok";
+    else if (["DRAIN", "NOLB", "ISSUING", "PENDING", "WAITING_DNS"].includes(head)) cls = "warn";
+    else if (["DOWN", "MAINT", "ERROR", "OFFLINE"].includes(head)) cls = "err";
     return `<span class="badge ${cls}">${esc(status || "?")}</span>`;
   }
 
@@ -320,44 +324,56 @@
   };
 
   async function loadStatTable(container, node) {
-    const res = await api(`/api/stats/nodes/${node.id}/stat`);
+    let res;
+    try {
+      res = await api(`/api/stats/nodes/${node.id}/stat`);
+    } catch (e) {
+      container.innerHTML = `<div class="error-text">${esc(e.message)}</div>`;
+      return;
+    }
     if (!res.ok) {
       container.innerHTML = `<div class="error-text">${esc(res.error)}</div>`;
       return;
     }
-    const rows = res.rows.filter((r) =>
-      ["frontend", "backend", "server", "listen"].includes((r.type || "").toLowerCase())
-    );
+    const typeLabels = { frontend: "Frontend", backend: "Backend", server: "Server" };
+    const rows = res.rows.filter((r) => typeLabels[r.type_name]);
     container.innerHTML = `
       <h4>Live-Status (Node: ${esc(node.name)})</h4>
-      <table class="data">
+      ${
+        rows.length
+          ? `<table class="data">
         <thead><tr><th>Proxy</th><th>Name</th><th>Typ</th><th>Status</th><th>Check</th><th>Sessions</th><th></th></tr></thead>
         <tbody>
           ${rows
             .map(
               (r) => `
             <tr>
-              <td>${esc(r.pxname)}</td><td>${esc(r.svname)}</td><td>${esc(r.type)}</td>
+              <td>${esc(r.pxname)}</td><td>${esc(r.svname)}</td><td>${esc(typeLabels[r.type_name])}</td>
               <td>${statusBadge(r.status)}</td><td>${esc(r.check_status || "-")}</td>
               <td>${esc(r.scur)}</td>
-              <td>${(r.type || "").toLowerCase() === "server" ? serverButtons(node.id, r) : ""}</td>
+              <td>${r.type_name === "server" ? serverButtons(node.id, r) : ""}</td>
             </tr>`
             )
             .join("")}
         </tbody>
-      </table>`;
+      </table>`
+          : '<div class="muted">Keine Frontends, Backends oder Server aktiv.</div>'
+      }`;
+    applyRoleRestrictions(container);
   }
 
   function serverButtons(nodeId, r) {
     const st = String(r.status || "").toUpperCase();
+    const maint = st.startsWith("MAINT");
+    const drain = st.startsWith("DRAIN");
     const px = js(r.pxname);
     const sv = js(r.svname);
     let out = "";
-    if (st !== "UP")
+    if (maint || drain)
       out += `<button class="btn sm ok" onclick="App.serverState(${nodeId}, '${px}', '${sv}', 'ready')">Aktivieren</button>`;
-    if (st === "UP")
+    if (!maint && !drain)
       out += `<button class="btn sm warn" onclick="App.serverState(${nodeId}, '${px}', '${sv}', 'drain')">Drain</button>`;
-    if (st !== "MAINT")
+    if (!maint)
       out += `<button class="btn sm err" onclick="App.serverState(${nodeId}, '${px}', '${sv}', 'maint')">Wartung</button>`;
     return out;
   }
