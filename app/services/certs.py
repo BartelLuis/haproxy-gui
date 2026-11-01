@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 from cryptography import x509
 
 from .. import db as dbmod
+from . import validate as v
 
 ACME_DIR = os.path.join(os.environ.get("HG_DATA", "/data"), "acme")
+DEFAULT_DNS_RESOLVERS = ["9.9.9.9:53", "1.1.1.1:53"]
 
 # Kuratierte Liste von lego-DNS-Providern: env = [(ENV_VAR, Beschreibung), ...]
 PROVIDERS = {
@@ -89,6 +91,26 @@ PROVIDERS = {
 
 def providers_public():
     return {k: {"label": v["label"], "env": v["env"]} for k, v in PROVIDERS.items()}
+
+
+def get_acme_settings() -> dict[str, list[str]]:
+    row = dbmod.one("SELECT value FROM alert_state WHERE key = 'acme_settings'")
+    resolvers = DEFAULT_DNS_RESOLVERS
+    if row is not None:
+        settings = json.loads(row["value"])
+        if not isinstance(settings, dict) or "dns_resolvers" not in settings:
+            raise ValueError("Ungültige gespeicherte ACME-DNS-Einstellungen")
+        resolvers = settings["dns_resolvers"]
+    return {"dns_resolvers": v.clean_dns_resolvers(resolvers)}
+
+
+def save_acme_settings(dns_resolvers: list[str]) -> None:
+    settings = {"dns_resolvers": v.clean_dns_resolvers(dns_resolvers)}
+    dbmod.execute(
+        "INSERT INTO alert_state (key, value) VALUES (?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ("acme_settings", json.dumps(settings)),
+    )
 
 
 def _base(cert):
@@ -339,7 +361,7 @@ def _cleanup_manual(cert):
                 pass
 
 
-def _issue_manual(cert, renew):
+def _issue_manual(cert, renew, dns_args: list[str]):
     cert_id = cert["id"]
     _cleanup_manual(cert)
     _set(cert_id, status="waiting_dns", message="")
@@ -353,7 +375,7 @@ def _issue_manual(cert, renew):
         "--path", ACME_DIR,
         "--email", cert["email"] or "admin@example.com",
         "--dns", "manual",
-    ]
+    ] + dns_args
     for d in domains:
         cmd += ["--domains", d]
     cmd.append("renew" if renew and os.path.exists(crt) else "run")
@@ -406,9 +428,18 @@ def issue(cert_id, renew=False):
         return
     provider = cert["dns_provider"]
     domains = json.loads(cert["domains"])
+    try:
+        dns_args = [
+            arg
+            for resolver in get_acme_settings()["dns_resolvers"]
+            for arg in ("--dns.resolvers", resolver)
+        ]
+    except ValueError as exc:
+        _set(cert_id, status="error", message=str(exc))
+        return
 
     if provider == "manual":
-        _issue_manual(cert, renew)
+        _issue_manual(cert, renew, dns_args)
         return
 
     _set(cert_id, status="issuing", message="")
@@ -418,7 +449,7 @@ def issue(cert_id, renew=False):
         "--accept-tos",
         "--path", ACME_DIR,
         "--email", cert["email"] or "admin@example.com",
-    ]
+    ] + dns_args
     env = dict(os.environ)
     try:
         if provider == "technitium":

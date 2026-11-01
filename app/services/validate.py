@@ -40,6 +40,41 @@ def clean_bind_ip(v, f="Bind-IP"):
     return clean_host(value, f)
 
 
+def clean_dns_resolvers(values: list[str]) -> list[str]:
+    if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+        raise ValueError("DNS-Server müssen als Liste von IP-Adressen angegeben werden")
+    cleaned = []
+    for value in values:
+        resolver = value.strip()
+        host, port = resolver, "53"
+        try:
+            if resolver.startswith("["):
+                match = re.fullmatch(r"\[([^\]]+)\](?::([0-9]+))?", resolver)
+                if not match:
+                    raise ValueError
+                host, port = match[1], match[2] or "53"
+                if ":" not in host:
+                    raise ValueError
+            elif resolver.count(":") == 1:
+                host, port = resolver.split(":")
+            if "%" in host or not re.fullmatch(r"[0-9]+", port):
+                raise ValueError
+            address = ipaddress.ip_address(host)
+            port_number = int(port)
+            if not 1 <= port_number <= 65535:
+                raise ValueError
+        except ValueError:
+            raise ValueError(
+                f"Ungültiger DNS-Server: {value!r}. Erwartet wird eine IPv4-/IPv6-Adresse"
+                " mit optionalem Port (1-65535)."
+            ) from None
+        host = f"[{address}]" if address.version == 6 else str(address)
+        resolver = f"{host}:{port_number}"
+        if resolver not in cleaned:
+            cleaned.append(resolver)
+    return cleaned
+
+
 def clean_domain(v, f="Domain"):  return require(RE_DOMAIN, v, f)
 def clean_iface(v, f="Interface"): return require(RE_IFACE, v, f)
 

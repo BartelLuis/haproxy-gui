@@ -42,6 +42,7 @@ Web-Oberfläche zur Verwaltung von **HAProxy** mit **Multi-Cluster-Support** und
     in deiner DNS-Zone an und bestätigst per Klick
   - Automatische Erneuerung (< 30 Tage Restlaufzeit) und Verteilung auf die Nodes
     (bei manuellem DNS ohne Auto-Renew – dort erscheint die neue Challenge in der GUI)
+  - Globale ACME-DNS-Resolver in der GUI konfigurierbar (Standard: `9.9.9.9`, `1.1.1.1`)
 - **Live-Monitoring** über die HAProxy Runtime-API: Status aller Proxys/Server,
   Server zur Laufzeit aktivieren / drainen / in Wartung nehmen
 - **Auth & Benutzerverwaltung:** mehrere Benutzer mit Rollen
@@ -279,6 +280,28 @@ ein einfacher `docker compose restart` übernimmt weder ein neues Image noch die
    damit bestehende HAProxy-Konfigurationen mit diesem Dateipfad weiterhin funktionieren.
    Alle drei Dateien erhalten die Dateirechte `600`.
 5. **Auto-Renew** erneuert Zertifikate ab < 30 Tagen Restlaufzeit und verteilt sie neu
+
+### DNS-Server für ACME
+
+Unter **Zertifikate → DNS-Server** können Administratoren die globalen DNS-Resolver
+ändern. Standardmäßig werden `9.9.9.9:53` und `1.1.1.1:53` verwendet, auch bei
+bestehenden Installationen ohne gespeicherte ACME-DNS-Einstellung.
+IPv4- und IPv6-Adressen sind möglich, optional mit Port, z. B. `9.9.9.9:5353`
+oder `[2620:fe::fe]:53`. Mehrere Server können durch Zeilenumbrüche, Leerzeichen,
+Kommas oder Semikolons getrennt werden; ohne Port gilt `53`.
+
+Die Einstellung wird in der Datenbank gespeichert und gilt ab der nächsten
+Ausstellung oder Erneuerung für alle DNS-Provider, einschließlich Technitium und
+manuellem DNS. Ein leeres Feld aktiviert wieder die Standard-Resolver von lego
+(System-DNS, ersatzweise Google-DNS, wenn keine System-Resolver ermittelt werden).
+Laufende Ausstellungen werden nicht umgestellt.
+
+Die Server werden über `lego --dns.resolvers` für rekursive DNS-Abfragen verwendet,
+etwa zur CNAME-Auflösung und Ermittlung der DNS-Zone. Die autoritativen
+Propagationsprüfungen und die unabhängige DNS-Validierung durch Let's Encrypt
+bleiben unverändert.
+
+### Zertifikate auf Nodes übertragen
 
 Zertifikate und Konfigurationen werden über den normalen SSH-Kanal übertragen.
 Die Zieldatei wird erst ersetzt, nachdem Dateigröße und SHA-256 der temporären

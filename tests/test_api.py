@@ -263,6 +263,71 @@ def test_dns_providers_and_cert_validation(server):
     assert bad.status_code == 400
 
 
+def test_acme_settings_require_authentication(server):
+    assert requests.get(server + "/api/acme/settings").status_code == 401
+    assert requests.put(
+        server + "/api/acme/settings", json={"dns_resolvers": ["9.9.9.9"]}
+    ).status_code == 401
+
+
+def test_acme_settings_round_trip_and_audit(server):
+    headers = _h(_login(server))
+    url = server + "/api/acme/settings"
+    original = requests.get(url, headers=headers)
+    assert original.status_code == 200
+    assert original.json() == {"dns_resolvers": ["9.9.9.9:53", "1.1.1.1:53"]}
+    try:
+        response = requests.put(
+            url,
+            json={"dns_resolvers": ["1.1.1.1", "1.1.1.1:53", "[2620:fe::fe]:5353"]},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        assert requests.get(url, headers=headers).json() == {
+            "dns_resolvers": ["1.1.1.1:53", "[2620:fe::fe]:5353"]
+        }
+        audit = requests.get(server + "/api/audit", headers=headers).json()
+        assert any(entry["action"] == "acme.settings" for entry in audit)
+        assert requests.put(url, json={"dns_resolvers": []}, headers=headers).status_code == 200
+        assert requests.get(url, headers=headers).json() == {"dns_resolvers": []}
+    finally:
+        assert requests.put(url, json=original.json(), headers=headers).status_code == 200
+
+
+@pytest.mark.parametrize("role", ["viewer", "operator"])
+def test_acme_settings_writable_only_by_admin(server, role):
+    admin_headers = _h(_login(server))
+    response = requests.post(
+        server + "/api/tokens", json={"name": f"acme-{role}", "role": role},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200, response.text
+    headers = _h(response.json()["token"])
+    url = server + "/api/acme/settings"
+    original = requests.get(url, headers=headers)
+    assert original.status_code == 200
+    assert requests.put(url, json={"dns_resolvers": []}, headers=headers).status_code == 403
+    assert requests.get(url, headers=headers).json() == original.json()
+
+
+@pytest.mark.parametrize(("payload", "status"), [
+    ({"dns_resolvers": ["invalid"]}, 400),
+    ({"dns_resolvers": ["9.9.9.9:65536"]}, 400),
+    ({"dns_resolvers": ["9.9.9.9", "1.1.1.1:0"]}, 400),
+    ({"dns_resolvers": "9.9.9.9"}, 422),
+    ({"dns_resolvers": [53]}, 422),
+    ({}, 422),
+])
+def test_acme_settings_reject_invalid_input_without_saving(server, payload, status):
+    headers = _h(_login(server))
+    url = server + "/api/acme/settings"
+    original = requests.get(url, headers=headers).json()
+    response = requests.put(url, json=payload, headers=headers)
+    assert response.status_code == status, response.text
+    assert response.json()["detail"]
+    assert requests.get(url, headers=headers).json() == original
+
+
 def test_ldap_settings_admin_only(server):
     token = _login(server)
     res = requests.get(server + "/api/ldap/settings", headers=_h(token))
